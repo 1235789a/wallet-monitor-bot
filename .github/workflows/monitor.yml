@@ -1,0 +1,39 @@
+name: Wallet Token Monitor
+
+on:
+  schedule:
+    # 每5分钟运行一次 (UTC时间)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install requests
+      
+      - name: Run monitor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+          BSCSCAN_API_KEY: ${{ secrets.BSCSCAN_API_KEY }}
+        run: python monitor.py
+      
+      - name: Commit updated state
+        run: |
+          git config user.name "Wallet Monitor Bot"
+          git config user.email "bot@wallet-monitor.com"
+          git add last_state.json wallets.json
+          git diff --staged --quiet || git commit -m "Update wallet state [skip ci]"
+          git push

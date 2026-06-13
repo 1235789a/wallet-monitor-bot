@@ -1,0 +1,8 @@
+{
+  "wallets": [
+    {
+      "address": "0xYourWalletAddressHere",
+      "chains": ["ethereum"]
+    }
+  ]
+}
