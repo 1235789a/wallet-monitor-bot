@@ -1,8 +1,16 @@
 {
   "wallets": [
     {
-      "address": "0xYourWalletAddressHere",
-      "chains": ["ethereum"]
+      "address": "TAFyvB8GALgHVF6jGUYseEZTc6BjHMjqMc",
+      "label": "我的波场钱包",
+      "chains": ["tron"],
+      "tron_contracts": ["TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"]
+    },
+    {
+      "address": "0x28C6c06298d514Db089934071355E5743bf21d60",
+      "label": "Binance热钱包",
+      "chains": ["ethereum"],
+      "tron_contracts": []
     }
   ]
 }
