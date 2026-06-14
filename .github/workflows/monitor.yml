@@ -43,8 +43,9 @@ jobs:
 
       - name: Run smart money scan
         timeout-minutes: 8
-        run: python -c "
-          from monitor import scan_smart_money, format_smart_alert
+        run: |
+          python -c "
+          from monitor import scan_smart_money
           from config import SMART_MONEY_CHAINS
           alerts = scan_smart_money(SMART_MONEY_CHAINS)
           if alerts:
@@ -53,17 +54,17 @@ jobs:
                   print(a[:200])
           else:
               print('No significant smart money activity in this cycle.')
-        "
+          "
 
-      - name: Generate daily digest (at 12 UTC)
-        if: github.event.schedule == '0 12 * * *'
-        run: python -c "
+      - name: Generate daily digest
+        run: |
+          python -c "
           from alpha import AlphaAggregator
           agg = AlphaAggregator()
           digest = agg.generate_daily_digest()
           if digest:
               print(digest[:500])
-        "
+          "
 
       - name: Commit state
         run: |
