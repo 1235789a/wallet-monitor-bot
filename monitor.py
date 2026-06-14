@@ -431,7 +431,7 @@ def scan_smart_money() -> dict:
         if chain not in by_chain:
             by_chain[chain] = []
         by_chain[chain].append(
-            (w["wallet_address"], w["nickname"], w["category"])
+            (w["address"], w["nickname"], w["category"])
         )
 
     all_txs = []
