@@ -25,13 +25,14 @@ jobs:
       - name: Create .env from GitHub Secrets
         run: |
           cat << EOF > .env
-          TG_BOT_TOKEN=${{ secrets.TG_BOT_TOKEN }}
+          TG_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
           ETHERSCAN_API_KEY=${{ secrets.ETHERSCAN_API_KEY }}
           BSCSCAN_API_KEY=${{ secrets.BSCSCAN_API_KEY }}
           DATABASE_PATH=whale_tracker.db
           PRICE_USDT=5
           TRIAL_DAYS=3
           CHECK_INTERVAL_MINUTES=10
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
           MIN_USD_VALUE=1000
           SMART_USD_THRESHOLD=5000
           DIGEST_HOUR_UTC=12
@@ -47,7 +48,7 @@ jobs:
           python -c "
           from monitor import scan_smart_money
           from config import SMART_MONEY_CHAINS
-          alerts = scan_smart_money(SMART_MONEY_CHAINS)
+          alerts = scan_smart_money()
           if alerts:
               print(f'Found {len(alerts)} smart money moves')
               for a in alerts[:5]:
