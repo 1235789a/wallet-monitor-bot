@@ -7,6 +7,22 @@ Reddit 需求: "How do you guys track whale wallet movements?" (👍198)
 import os
 
 # ============================================================
+# 自动加载 .env 文件（如果存在）
+# ============================================================
+_ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_ENV_FILE):
+    with open(_ENV_FILE, "r", encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _key, _, _value = _line.partition("=")
+            _key = _key.strip()
+            _value = _value.strip().strip('"').strip("'")
+            if _key and _key not in os.environ:
+                os.environ[_key] = _value
+
+# ============================================================
 # Telegram Bot 配置
 # ============================================================
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
@@ -91,3 +107,15 @@ CHAINS = {
         "native_symbol": "TRX",
     },
 }
+
+# ============================================================
+# 聪明钱监控配置
+# ============================================================
+# 跟踪哪些链上的聪明钱
+SMART_MONEY_CHAINS = os.environ.get("SMART_MONEY_CHAINS", "ethereum,bsc,tron").split(",")
+# 聪明钱地址更新热度的最低USD阈值
+SMART_USD_THRESHOLD = float(os.environ.get("SMART_USD_THRESHOLD", "5000"))
+# 每日摘要推送时间（UTC）
+DIGEST_HOUR_UTC = int(os.environ.get("DIGEST_HOUR_UTC", "12"))
+# 热度榜Top N
+HEAT_TOP_N = int(os.environ.get("HEAT_TOP_N", "10"))

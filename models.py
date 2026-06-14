@@ -66,6 +66,46 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tracked_user ON tracked_wallets(user_id);
         CREATE INDEX IF NOT EXISTS idx_tx_user ON tx_history(user_id);
         CREATE INDEX IF NOT EXISTS idx_tx_hash ON tx_history(tx_hash, chain);
+
+        CREATE TABLE IF NOT EXISTS smart_wallets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            address TEXT NOT NULL,
+            chain TEXT NOT NULL,
+            nickname TEXT,
+            category TEXT,
+            score INTEGER DEFAULT 50,
+            followers INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(address, chain)
+        );
+
+        CREATE TABLE IF NOT EXISTS token_heat (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chain TEXT NOT NULL,
+            token_address TEXT NOT NULL,
+            token_symbol TEXT,
+            token_name TEXT,
+            heat_score INTEGER DEFAULT 0,
+            wallet_count INTEGER DEFAULT 0,
+            total_usd_value REAL DEFAULT 0,
+            last_updated TEXT,
+            UNIQUE(chain, token_address)
+        );
+
+        CREATE TABLE IF NOT EXISTS daily_digest (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            digest_json TEXT,
+            pushed INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(date)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sw_score ON smart_wallets(score DESC);
+        CREATE INDEX IF NOT EXISTS idx_sw_chain ON smart_wallets(chain, is_active);
+        CREATE INDEX IF NOT EXISTS idx_th_score ON token_heat(heat_score DESC);
+        CREATE INDEX IF NOT EXISTS idx_th_chain ON token_heat(chain);
     """)
     conn.commit()
     conn.close()
@@ -307,6 +347,186 @@ def was_tx_pushed(tx_hash: str, chain: str, user_id: str) -> bool:
     ).fetchone()
     conn.close()
     return row is not None
+
+
+# ============================================================
+# 聪明钱地址库 (smart_wallets)
+# ============================================================
+
+def get_smart_wallet(address: str, chain: str) -> dict | None:
+    """获取单个聪明钱包信息"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM smart_wallets WHERE address = ? AND chain = ? AND is_active = 1",
+        (address, chain),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_leaderboard(limit: int = 10, offset: int = 0) -> list:
+    """获取聪明钱排行榜（按score降序）"""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM smart_wallets WHERE is_active = 1 ORDER BY score DESC LIMIT ? OFFSET ?",
+        (limit, offset),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_smart_wallets(chain: str = None) -> list:
+    """获取所有活跃聪明钱包，可按链筛选"""
+    conn = get_conn()
+    if chain:
+        rows = conn.execute(
+            "SELECT * FROM smart_wallets WHERE is_active = 1 AND chain = ?",
+            (chain,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM smart_wallets WHERE is_active = 1",
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_smart_wallet_score(address: str, chain: str, score: int) -> None:
+    """更新聪明钱包评分"""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE smart_wallets SET score = ? WHERE address = ? AND chain = ?",
+        (score, address, chain),
+    )
+    conn.commit()
+    conn.close()
+
+
+def increment_followers(address: str, chain: str) -> int:
+    """增加关注者数量，返回新值"""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE smart_wallets SET followers = followers + 1 WHERE address = ? AND chain = ?",
+        (address, chain),
+    )
+    row = conn.execute(
+        "SELECT followers FROM smart_wallets WHERE address = ? AND chain = ?",
+        (address, chain),
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return row["followers"] if row else 0
+
+
+# ============================================================
+# 代币热度 (token_heat)
+# ============================================================
+
+def upsert_token_heat(chain: str, token_address: str, token_symbol: str,
+                       token_name: str = "", wallet_count_inc: int = 1,
+                       usd_value_add: float = 0) -> None:
+    """更新或插入代币热度记录"""
+    conn = get_conn()
+    now = datetime.now().isoformat()
+    existing = conn.execute(
+        "SELECT id, wallet_count, total_usd_value FROM token_heat WHERE chain = ? AND token_address = ?",
+        (chain, token_address),
+    ).fetchone()
+
+    if existing:
+        new_wc = existing["wallet_count"] + wallet_count_inc
+        new_tv = (existing["total_usd_value"] or 0) + usd_value_add
+        import math
+        heat = int(new_wc * 15 + math.log(max(new_tv, 1)) * 10)
+        heat = min(heat, 100)
+        conn.execute(
+            """UPDATE token_heat
+               SET token_symbol = ?, token_name = ?, wallet_count = ?,
+                   total_usd_value = ?, heat_score = ?, last_updated = ?
+               WHERE id = ?""",
+            (token_symbol, token_name, new_wc, new_tv, heat, now, existing["id"]),
+        )
+    else:
+        import math
+        heat = int(wallet_count_inc * 15 + math.log(max(usd_value_add, 1)) * 10)
+        heat = min(heat, 100)
+        conn.execute(
+            """INSERT INTO token_heat
+               (chain, token_address, token_symbol, token_name, heat_score,
+                wallet_count, total_usd_value, last_updated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (chain, token_address, token_symbol, token_name, heat,
+             wallet_count_inc, usd_value_add, now),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_hot_tokens(limit: int = 10, chain: str = None) -> list:
+    """获取热门代币排行"""
+    conn = get_conn()
+    if chain:
+        rows = conn.execute(
+            "SELECT * FROM token_heat WHERE chain = ? ORDER BY heat_score DESC LIMIT ?",
+            (chain, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM token_heat ORDER BY heat_score DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def reset_daily_token_heat() -> None:
+    """每日重置代币热度（24小时窗口）"""
+    conn = get_conn()
+    conn.execute("UPDATE token_heat SET wallet_count = 0, total_usd_value = 0, heat_score = 0")
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# 每日摘要 (daily_digest)
+# ============================================================
+
+def save_daily_digest(date_str: str, digest: dict) -> None:
+    """保存或更新每日摘要"""
+    conn = get_conn()
+    import json
+    digest_json = json.dumps(digest, ensure_ascii=False)
+    conn.execute(
+        """INSERT OR REPLACE INTO daily_digest (date, digest_json, pushed)
+           VALUES (?, ?, 0)""",
+        (date_str, digest_json),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_daily_digest(date_str: str) -> dict | None:
+    """获取指定日期的摘要"""
+    conn = get_conn()
+    import json
+    row = conn.execute(
+        "SELECT * FROM daily_digest WHERE date = ?",
+        (date_str,),
+    ).fetchone()
+    conn.close()
+    if row:
+        result = dict(row)
+        result["digest"] = json.loads(result["digest_json"])
+        return result
+    return None
+
+
+def mark_digest_pushed(date_str: str) -> None:
+    """标记摘要已推送"""
+    conn = get_conn()
+    conn.execute("UPDATE daily_digest SET pushed = 1 WHERE date = ?", (date_str,))
+    conn.commit()
+    conn.close()
 
 
 # ============================================================

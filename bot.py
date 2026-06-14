@@ -20,14 +20,19 @@ from config import (
     TG_BOT_TOKEN, PAYOUT_WALLET, PAYOUT_CHAIN, PRICE_USDT,
     TRIAL_DAYS, SUBSCRIPTION_DAYS, CHECK_INTERVAL_MINUTES,
     FREE_WALLET_LIMIT, PAID_WALLET_LIMIT, MIN_USD_VALUE,
+    SMART_MONEY_CHAINS, HEAT_TOP_N, DIGEST_HOUR_UTC,
+    CHAINS,
 )
 from models import (
     init_db, upsert_user, activate_paid, is_user_active,
     add_tracked_wallet, remove_tracked_wallet, get_user_wallets,
     get_all_active_users, save_tx_history,
+    get_hot_tokens, get_leaderboard, save_daily_digest, get_daily_digest,
+    mark_digest_pushed, get_all_smart_wallets, get_smart_wallet,
 )
 from payment import check_payment, validate_wallet_address, detect_chain_from_address
-from monitor import scan_all_chains, format_alert
+from monitor import scan_all_chains, format_alert, scan_smart_money, format_smart_alert
+from alpha import AlphaAggregator
 
 # ============================================================
 # 键盘 Markup
@@ -341,6 +346,137 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cmd_alpha(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """查看 Alpha 聪明钱信号：代币热度榜 + 聪明钱排行"""
+    user_id = str(update.effective_user.id)
+    user = upsert_user(user_id, update.effective_user.username or "")
+
+    # 强制触发一次聪明钱扫描
+    await update.message.reply_text("🔍 正在扫描聪明钱信号...")
+
+    try:
+        smart_result = scan_smart_money()
+        hot_tokens = get_hot_tokens(limit=HEAT_TOP_N)
+        leaderboard = get_leaderboard(limit=10)
+
+        if not hot_tokens:
+            await update.message.reply_text(
+                "📊 *Alpha 信号*\n\n暂无数据。稍后再试！",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        msg_lines = ["🧠 *Alpha 聪明钱信号*\n"]
+
+        # 热度榜
+        msg_lines.append("🔥 *24h 代币热度 Top10*\n")
+        for i, t in enumerate(hot_tokens[:10], 1):
+            symbol = t["token_symbol"] or "?"
+            chain_emoji = CHAINS.get(t.get("chain", "ethereum"), {}).get("emoji", "📊")
+            msg_lines.append(
+                f"  {i}. {chain_emoji} *{symbol}* — 🔥{t['heat_score']}"
+            )
+
+        # 汇总
+        total_activity = sum(t["wallet_count"] for t in hot_tokens)
+        msg_lines.append(f"\n📊 总活动: {total_activity} 次聪明钱交易")
+
+        # 聪明钱排行
+        if leaderboard:
+            msg_lines.append("\n🏆 *聪明钱 Top5*")
+            for w in leaderboard[:5]:
+                cat_emoji = {"mm": "🏦", "vc": "💰", "trader": "🧠", "exchange": "🏦", "unknown": "❓"}
+                emoji = cat_emoji.get(w.get("category", ""), "🧠")
+                msg_lines.append(f"  {emoji} {w['nickname']} — ⭐{w['score']}")
+
+        if smart_result.get("aggr"):
+            digest = smart_result["aggr"].generate_digest()
+            save_daily_digest(digest["date"], digest)
+
+        await update.message.reply_text(
+            "\n".join(msg_lines),
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True,
+        )
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"⚠️ Alpha 扫描出错: {e}\n请稍后重试。"
+        )
+
+
+async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """查看今日 Alpha 日报"""
+    user_id = str(update.effective_user.id)
+    user = upsert_user(user_id, update.effective_user.username or "")
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    digest = get_daily_digest(today)
+
+    if not digest:
+        # 尝试生成
+        await update.message.reply_text("📊 正在生成今日日报...")
+        smart_result = scan_smart_money()
+        if smart_result.get("aggr"):
+            digest = smart_result["aggr"].generate_digest()
+            save_daily_digest(today, digest)
+            digest = get_daily_digest(today)
+
+    if not digest:
+        await update.message.reply_text(
+            "📊 *Alpha 日报*\n\n今日暂无明显聪明钱动向。",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    digest_data = digest
+    message = digest_data.get("message", "日报数据异常")
+    pushed = digest_data.get("pushed", False)
+
+    status_line = "✅ 已推送" if pushed else "📋 待推送"
+    msg = f"📊 *Alpha 日报 · {today}* [{status_line}]\n{message}"
+
+    await update.message.reply_text(
+        msg,
+        parse_mode=ParseMode.MARKDOWN,
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_smart_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """查看当前追踪的聪明钱地址"""
+    user_id = str(update.effective_user.id)
+    user = upsert_user(user_id, update.effective_user.username or "")
+
+    wallets = get_all_smart_wallets()
+
+    if not wallets:
+        await update.message.reply_text(
+            "🧠 当前没有追踪的聪明钱地址。",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    cat_emoji = {"mm": "🏦 做市商", "vc": "💰 VC", "trader": "🧠 交易员",
+                 "exchange": "🏦 交易所", "unknown": "❓"}
+
+    msg_lines = [f"🧠 *追踪的聪明钱 · {len(wallets)} 个*\n"]
+    for w in wallets:
+        chain_emoji = CHAINS.get(w.get("chain", "ethereum"), {}).get("emoji", "📊")
+        cat = cat_emoji.get(w.get("category", ""), "🧠")
+        score = w.get("score", 0)
+        msg_lines.append(
+            f"  {chain_emoji} {cat} {w['nickname']} — ⭐{score}"
+        )
+        msg_lines.append(f"    `{w['wallet_address'][:10]}...{w['wallet_address'][-6:]}`")
+
+    await update.message.reply_text(
+        "\n".join(msg_lines),
+        parse_mode=ParseMode.MARKDOWN,
+        disable_web_page_preview=True,
+    )
+
+
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """管理员广播（仅 admin user_ids 列表）"""
     user_id = str(update.effective_user.id)
@@ -553,8 +689,8 @@ async def handle_verify_message(update: Update, context: ContextTypes.DEFAULT_TY
 # ============================================================
 
 async def monitoring_loop(app: Application):
-    """后台监控循环：定期扫描链上数据并推送"""
-    print("🐋 Monitoring loop started...")
+    """后台监控循环：定期扫描链上数据并推送（鲸鱼追踪）"""
+    print("🐋 Whale monitoring loop started...")
     while True:
         try:
             results = scan_all_chains()
@@ -589,10 +725,91 @@ async def monitoring_loop(app: Application):
                     print(f"  Push error for user {user_id}: {e}")
 
         except Exception as e:
-            print(f"Scan error: {e}")
+            print(f"Whale scan error: {e}")
             traceback.print_exc()
 
         await asyncio.sleep(CHECK_INTERVAL_MINUTES * 60)
+
+
+async def smart_money_loop(app: Application):
+    """聪明钱 Alpha 信号扫描 + 热度榜入库"""
+    print("🧠 Smart money Alpha loop started...")
+    while True:
+        try:
+            print(f"[{datetime.now():%H:%M:%S}] Scanning smart money...")
+            result = scan_smart_money()
+
+            if result.get("alerts"):
+                print(f"  Found {len(result['alerts'])} smart money moves")
+
+                # 推送给所有活跃用户
+                active_users = get_all_active_users()
+                for alert in result["alerts"]:
+                    msg = format_smart_alert(alert)
+                    for user in active_users:
+                        try:
+                            await app.bot.send_message(
+                                chat_id=user["user_id"],
+                                text=msg,
+                                parse_mode=ParseMode.MARKDOWN,
+                                disable_web_page_preview=True,
+                            )
+                            await asyncio.sleep(0.15)
+                        except Exception:
+                            pass
+
+            # 生成日报数据（存库，定时推送用）
+            if result.get("aggr"):
+                digest = result["aggr"].generate_digest()
+                save_daily_digest(digest["date"], digest)
+
+            print(f"  Smart money scan complete. Hot tokens: {len(get_hot_tokens(limit=HEAT_TOP_N))}")
+
+        except Exception as e:
+            print(f"Smart money scan error: {e}")
+            traceback.print_exc()
+
+        # 每 5 分钟扫一次
+        await asyncio.sleep(300)
+
+
+async def digest_push_loop(app: Application):
+    """每日定时推送 Alpha 日报给所有活跃用户"""
+    print(f"📊 Digest push loop started (target: {DIGEST_HOUR_UTC}:00 UTC)...")
+    while True:
+        try:
+            now = datetime.utcnow()
+            # 检查是否到了推送时间（小时匹配，且今天还没推送过）
+            if now.hour == DIGEST_HOUR_UTC:
+                today = now.strftime("%Y-%m-%d")
+                digest = get_daily_digest(today)
+
+                if digest and not digest.get("pushed"):
+                    active_users = get_all_active_users()
+                    print(f"📊 Pushing daily digest to {len(active_users)} users...")
+
+                    for user in active_users:
+                        try:
+                            await app.bot.send_message(
+                                chat_id=user["user_id"],
+                                text=f"📊 *Alpha 聪明钱日报 · {today}*\n{digest['message']}",
+                                parse_mode=ParseMode.MARKDOWN,
+                                disable_web_page_preview=True,
+                            )
+                            await asyncio.sleep(0.2)
+                        except Exception:
+                            pass
+
+                    mark_digest_pushed(today)
+                    print(f"📊 Daily digest pushed for {today}")
+
+            # 每分钟检查一次
+            await asyncio.sleep(60)
+
+        except Exception as e:
+            print(f"Digest push error: {e}")
+            traceback.print_exc()
+            await asyncio.sleep(300)
 
 
 # ============================================================
@@ -621,6 +838,9 @@ def main():
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("verify", cmd_verify))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+    app.add_handler(CommandHandler("alpha", cmd_alpha))
+    app.add_handler(CommandHandler("digest", cmd_digest))
+    app.add_handler(CommandHandler("smart", cmd_smart_wallets))
 
     # 按钮
     app.add_handler(CallbackQueryHandler(callback_handler))
@@ -628,11 +848,13 @@ def main():
     # 文本消息（地址验证）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_verify_message))
 
-    # 后台监控
+    # 后台监控（3条独立协程）
     loop = asyncio.get_event_loop()
-    loop.create_task(monitoring_loop(app))
+    loop.create_task(monitoring_loop(app))       # 鲸鱼追踪
+    loop.create_task(smart_money_loop(app))      # 聪明钱 Alpha
+    loop.create_task(digest_push_loop(app))      # 每日日报推送
 
-    print("✅ Bot is running. Press Ctrl+C to stop.")
+    print("✅ Bot is running (Whale + Smart Money + Digest). Press Ctrl+C to stop.")
     app.run_polling()
 
 
