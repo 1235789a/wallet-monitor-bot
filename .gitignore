@@ -2,3 +2,6 @@ _push.py
 push_to_github.py
 _test_tron.py
 last_state.json
+*.db
+.env
+__pycache__/
