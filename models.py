@@ -111,6 +111,47 @@ def init_db():
     conn.close()
 
 
+def count_users() -> int:
+    conn = get_conn()
+    n = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    conn.close()
+    return int(n)
+
+
+def count_tracked_wallets(active_only: bool = True) -> int:
+    conn = get_conn()
+    if active_only:
+        n = conn.execute("SELECT COUNT(*) FROM tracked_wallets WHERE active = 1").fetchone()[0]
+    else:
+        n = conn.execute("SELECT COUNT(*) FROM tracked_wallets").fetchone()[0]
+    conn.close()
+    return int(n)
+
+
+def count_smart_wallets(active_only: bool = True) -> int:
+    conn = get_conn()
+    if active_only:
+        n = conn.execute("SELECT COUNT(*) FROM smart_wallets WHERE is_active = 1").fetchone()[0]
+    else:
+        n = conn.execute("SELECT COUNT(*) FROM smart_wallets").fetchone()[0]
+    conn.close()
+    return int(n)
+
+
+def count_token_heat() -> int:
+    conn = get_conn()
+    n = conn.execute("SELECT COUNT(*) FROM token_heat").fetchone()[0]
+    conn.close()
+    return int(n)
+
+
+def count_daily_digest() -> int:
+    conn = get_conn()
+    n = conn.execute("SELECT COUNT(*) FROM daily_digest").fetchone()[0]
+    conn.close()
+    return int(n)
+
+
 # ============================================================
 # 用户管理
 # ============================================================

@@ -21,18 +21,21 @@ from config import (
     TRIAL_DAYS, SUBSCRIPTION_DAYS, CHECK_INTERVAL_MINUTES,
     FREE_WALLET_LIMIT, PAID_WALLET_LIMIT, MIN_USD_VALUE,
     SMART_MONEY_CHAINS, HEAT_TOP_N, DIGEST_HOUR_UTC,
+    ETHERSCAN_API_KEY, BSCSCAN_API_KEY, TRONGRID_API_KEY,
     CHAINS,
 )
 from models import (
-    init_db, upsert_user, activate_paid, is_user_active,
+    get_conn, init_db, upsert_user, activate_paid, is_user_active,
     add_tracked_wallet, remove_tracked_wallet, get_user_wallets,
     get_all_active_users, save_tx_history,
     get_hot_tokens, get_leaderboard, save_daily_digest, get_daily_digest,
     mark_digest_pushed, get_all_smart_wallets, get_smart_wallet,
+    count_users, count_tracked_wallets, count_smart_wallets, count_token_heat, count_daily_digest,
 )
 from payment import check_payment, validate_wallet_address, detect_chain_from_address
 from monitor import scan_all_chains, format_alert, scan_smart_money, format_smart_alert
 from alpha import AlphaAggregator
+from seed_wallets import seed_database
 
 # ============================================================
 # 键盘 Markup
@@ -430,8 +433,8 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     digest_data = digest
-    message = digest_data.get("message", "日报数据异常")
-    pushed = digest_data.get("pushed", False)
+    message = (digest_data.get("digest") or {}).get("message", "日报数据异常")
+    pushed = bool(digest_data.get("pushed", False))
 
     status_line = "✅ 已推送" if pushed else "📋 待推送"
     msg = f"📊 *Alpha 日报 · {today}* [{status_line}]\n{message}"
@@ -457,18 +460,25 @@ async def cmd_smart_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    cat_emoji = {"mm": "🏦 做市商", "vc": "💰 VC", "trader": "🧠 交易员",
-                 "exchange": "🏦 交易所", "unknown": "❓"}
+    cat_emoji = {
+        "market_maker": "🏦 做市商",
+        "fund": "💰 基金",
+        "whale": "🐋 鲸鱼",
+        "exchange": "🏦 交易所",
+        "trader": "🧠 交易员",
+        "unknown": "❓",
+    }
 
     msg_lines = [f"🧠 *追踪的聪明钱 · {len(wallets)} 个*\n"]
     for w in wallets:
         chain_emoji = CHAINS.get(w.get("chain", "ethereum"), {}).get("emoji", "📊")
         cat = cat_emoji.get(w.get("category", ""), "🧠")
         score = w.get("score", 0)
+        addr = w.get("address") or w.get("wallet_address") or ""
         msg_lines.append(
             f"  {chain_emoji} {cat} {w['nickname']} — ⭐{score}"
         )
-        msg_lines.append(f"    `{w['wallet_address'][:10]}...{w['wallet_address'][-6:]}`")
+        msg_lines.append(f"    `{addr[:10]}...{addr[-6:]}`")
 
     await update.message.reply_text(
         "\n".join(msg_lines),
@@ -739,12 +749,13 @@ async def smart_money_loop(app: Application):
             print(f"[{datetime.now():%H:%M:%S}] Scanning smart money...")
             result = scan_smart_money()
 
-            if result.get("alerts"):
-                print(f"  Found {len(result['alerts'])} smart money moves")
+            alerts = result.get("txs") or []
+            if alerts:
+                print(f"  Found {len(alerts)} smart money moves")
 
                 # 推送给所有活跃用户
                 active_users = get_all_active_users()
-                for alert in result["alerts"]:
+                for alert in alerts:
                     msg = format_smart_alert(alert)
                     for user in active_users:
                         try:
@@ -792,7 +803,7 @@ async def digest_push_loop(app: Application):
                         try:
                             await app.bot.send_message(
                                 chat_id=user["user_id"],
-                                text=f"📊 *Alpha 聪明钱日报 · {today}*\n{digest['message']}",
+                                text=f"📊 *Alpha 聪明钱日报 · {today}*\n{(digest.get('digest') or {}).get('message', '')}",
                                 parse_mode=ParseMode.MARKDOWN,
                                 disable_web_page_preview=True,
                             )
@@ -816,6 +827,53 @@ async def digest_push_loop(app: Application):
 # Main
 # ============================================================
 
+def print_system_status():
+    print("===== SYSTEM STATUS =====")
+    print(f"Users: {count_users()}")
+    print(f"Tracked Wallets: {count_tracked_wallets()}")
+    print(f"Smart Wallets: {count_smart_wallets()}")
+    print(f"Token Heat: {count_token_heat()}")
+    print(f"Digests: {count_daily_digest()}")
+    print("=========================")
+
+
+def bootstrap_system_data():
+    if not ETHERSCAN_API_KEY:
+        print("[WARNING] Etherscan API Key Missing")
+    if not BSCSCAN_API_KEY:
+        print("[WARNING] BSC API Key Missing")
+    if not TRONGRID_API_KEY:
+        print("[WARNING] Tron API Key Missing")
+
+    sw_count = count_smart_wallets()
+    print(f"[INIT] Smart Wallets: {sw_count}")
+    if sw_count == 0:
+        print("[INIT] Seeding Smart Wallet Database...")
+        conn = get_conn()
+        imported, _skipped = seed_database(conn)
+        conn.close()
+        print(f"[INIT] Seed Complete: {imported} wallets imported")
+
+    if count_token_heat() == 0:
+        try:
+            print("[INIT] Token Heat: 0")
+            print("[INIT] Generating initial Alpha data...")
+            scan_smart_money()
+        except Exception as e:
+            print(f"[WARNING] Initial Alpha generation failed: {e}")
+
+    if count_daily_digest() == 0:
+        try:
+            print("[INIT] Digests: 0")
+            print("[INIT] Generating initial Digest...")
+            digest = AlphaAggregator().generate_digest()
+            save_daily_digest(digest["date"], digest)
+        except Exception as e:
+            print(f"[WARNING] Initial Digest generation failed: {e}")
+
+    print_system_status()
+
+
 def main():
     if not TG_BOT_TOKEN:
         print("❌ 请设置环境变量 TG_BOT_TOKEN")
@@ -825,6 +883,7 @@ def main():
         print("⚠️ 未设置 PAYOUT_WALLET，支付功能不可用")
 
     init_db()
+    bootstrap_system_data()
     print(f"🐋 Whale Tracker Bot starting...")
 
     app = Application.builder().token(TG_BOT_TOKEN).build()
