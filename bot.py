@@ -22,6 +22,7 @@ from config import (
     FREE_WALLET_LIMIT, PAID_WALLET_LIMIT, MIN_USD_VALUE,
     SMART_MONEY_CHAINS, HEAT_TOP_N, DIGEST_HOUR_UTC,
     CHAINS,
+    ETHERSCAN_API_KEY, BSCSCAN_API_KEY, TRONGRID_API_KEY,
 )
 from models import (
     init_db, upsert_user, activate_paid, is_user_active,
@@ -29,7 +30,10 @@ from models import (
     get_all_active_users, save_tx_history,
     get_hot_tokens, get_leaderboard, save_daily_digest, get_daily_digest,
     mark_digest_pushed, get_all_smart_wallets, get_smart_wallet,
+    get_users_count, get_tracked_wallets_count, get_smart_wallets_count,
+    get_token_heat_count, get_daily_digest_count, get_conn,
 )
+from seed_wallets import seed_database
 from payment import check_payment, validate_wallet_address, detect_chain_from_address
 from monitor import scan_all_chains, format_alert, scan_smart_money, format_smart_alert
 from alpha import AlphaAggregator
@@ -468,7 +472,7 @@ async def cmd_smart_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg_lines.append(
             f"  {chain_emoji} {cat} {w['nickname']} — ⭐{score}"
         )
-        msg_lines.append(f"    `{w['wallet_address'][:10]}...{w['wallet_address'][-6:]}`")
+        msg_lines.append(f"    `{w['address'][:10]}...{w['address'][-6:]}`")
 
     await update.message.reply_text(
         "\n".join(msg_lines),
@@ -813,6 +817,63 @@ async def digest_push_loop(app: Application):
 
 
 # ============================================================
+# 启动初始化
+# ============================================================
+
+def bootstrap():
+    """启动引导：自动完成所有必要数据准备"""
+    init_db()
+    print(f"🐋 Whale Tracker Bot starting...")
+
+    if not ETHERSCAN_API_KEY:
+        print("[WARNING] Etherscan API Key Missing")
+    if not BSCSCAN_API_KEY:
+        print("[WARNING] BSC API Key Missing")
+    if not TRONGRID_API_KEY:
+        print("[WARNING] Tron API Key Missing")
+
+    sw_count = get_smart_wallets_count()
+    print(f"[INIT] Smart Wallets: {sw_count}")
+
+    if sw_count == 0:
+        print("[INIT] Seeding Smart Wallet Database...")
+        conn = get_conn()
+        inserted, skipped = seed_database(conn)
+        conn.close()
+        print(f"[INIT] Seed Complete: {inserted} wallets imported")
+        sw_count = inserted
+
+    th_count = get_token_heat_count()
+    if th_count == 0 and sw_count > 0:
+        print("[INIT] Token Heat empty, running initial smart money scan...")
+        try:
+            scan_smart_money()
+            print("[INIT] Smart money scan complete")
+        except Exception as e:
+            print(f"[WARNING] Initial smart money scan failed: {e}")
+
+    dd_count = get_daily_digest_count()
+    if dd_count == 0:
+        print("[INIT] Daily Digest empty, generating initial digest...")
+        try:
+            aggr = AlphaAggregator()
+            digest = aggr.generate_digest()
+            save_daily_digest(digest["date"], digest)
+            print("[INIT] Initial digest generated")
+        except Exception as e:
+            print(f"[WARNING] Initial digest generation failed: {e}")
+
+    print("=" * 40)
+    print("===== SYSTEM STATUS =====")
+    print(f"Users: {get_users_count()}")
+    print(f"Tracked Wallets: {get_tracked_wallets_count()}")
+    print(f"Smart Wallets: {get_smart_wallets_count()}")
+    print(f"Token Heat: {get_token_heat_count()}")
+    print(f"Digests: {get_daily_digest_count()}")
+    print("=" * 40)
+
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -824,8 +885,7 @@ def main():
     if not PAYOUT_WALLET:
         print("⚠️ 未设置 PAYOUT_WALLET，支付功能不可用")
 
-    init_db()
-    print(f"🐋 Whale Tracker Bot starting...")
+    bootstrap()
 
     app = Application.builder().token(TG_BOT_TOKEN).build()
 
