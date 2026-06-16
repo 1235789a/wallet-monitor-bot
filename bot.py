@@ -7,7 +7,15 @@ Reddit: "How do you guys track whale wallet movements?" (👍198)
 import asyncio
 import sys
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
+
+# Windows 控制台默认 GBK 编码，遇到 emoji 会崩溃；强制 stdout/stderr 用 UTF-8
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -21,8 +29,9 @@ from config import (
     TRIAL_DAYS, SUBSCRIPTION_DAYS, CHECK_INTERVAL_MINUTES,
     FREE_WALLET_LIMIT, PAID_WALLET_LIMIT, MIN_USD_VALUE,
     SMART_MONEY_CHAINS, HEAT_TOP_N, DIGEST_HOUR_UTC,
-    CHAINS,
+    CHAINS, ADMIN_USER_IDS,
 )
+
 from models import (
     init_db, upsert_user, activate_paid, is_user_active,
     add_tracked_wallet, remove_tracked_wallet, get_user_wallets,
@@ -31,24 +40,41 @@ from models import (
     mark_digest_pushed, get_all_smart_wallets, get_smart_wallet,
 )
 from payment import check_payment, validate_wallet_address, detect_chain_from_address
-from monitor import scan_all_chains, format_alert, scan_smart_money, format_smart_alert
+from monitor import (
+    scan_all_chains, format_alert, scan_smart_money, format_smart_alert,
+)
+
 from alpha import AlphaAggregator
 
 # ============================================================
 # 键盘 Markup
 # ============================================================
 
+def tier_of(user: dict) -> str:
+    """把 user.status 归一为信号分层 tier：paid / trial / free(expired)"""
+    status = user.get("status", "trial")
+    if status == "paid":
+        return "paid"
+    if status == "trial":
+        return "trial"
+    return "free"
+
+
 def main_menu_keyboard(status: str):
-    """主菜单按钮"""
+    """主菜单按钮 · 精简为 4 键"""
     buttons = [
-        [InlineKeyboardButton("📋 我的追踪列表", callback_data="list")],
-        [InlineKeyboardButton("➕ 添加追踪地址", callback_data="add_help")],
-        [InlineKeyboardButton("➖ 移除追踪地址", callback_data="remove_help")],
+        [
+            InlineKeyboardButton("📋 我的追踪", callback_data="list"),
+            InlineKeyboardButton("➕ 添加地址", callback_data="add_help"),
+        ],
+        [InlineKeyboardButton("🧠 Alpha 聪明钱信号", callback_data="alpha")],
     ]
-    if status != "paid":
-        buttons.append([InlineKeyboardButton(f"💎 升级付费 (${PRICE_USDT} USDT/月)", callback_data="pay")])
-    buttons.append([InlineKeyboardButton("📊 账户状态", callback_data="status")])
+    if status == "paid":
+        buttons.append([InlineKeyboardButton("📊 账户状态", callback_data="status")])
+    else:
+        buttons.append([InlineKeyboardButton(f"💎 升级 Pro (${PRICE_USDT} USDT/月)", callback_data="pay")])
     return InlineKeyboardMarkup(buttons)
+
 
 
 # ============================================================
@@ -123,7 +149,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"付费到期: {paid_end.strftime('%m/%d %H:%M')}\n剩余: {days} 天\n"
 
     if user["status"] == "expired":
-        msg += "💎 续费 ${PRICE_USDT} USDT/月，点击下方按钮\n"
+        msg += f"💎 续费 ${PRICE_USDT} USDT/月，点击下方按钮\n"
 
     await update.message.reply_text(
         msg,
@@ -294,7 +320,7 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "用法: `/verify <你的付款钱包地址>`\n"
-            "系统会检查该地址是否已向你的收款地址转了 ${PRICE_USDT} USDT",
+            f"系统会检查该地址是否已向你的收款地址转了 ${PRICE_USDT} USDT",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -410,7 +436,7 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user = upsert_user(user_id, update.effective_user.username or "")
 
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     digest = get_daily_digest(today)
 
     if not digest:
@@ -480,9 +506,14 @@ async def cmd_smart_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """管理员广播（仅 admin user_ids 列表）"""
     user_id = str(update.effective_user.id)
-    ADMIN_IDS = ["你的Telegram ID"]  # TODO: 改为你的 TG ID
 
-    if user_id not in ADMIN_IDS:
+    if not ADMIN_USER_IDS:
+        await update.message.reply_text(
+            "⚠️ 未配置管理员。请在 .env 里设置 ADMIN_USER_IDS。"
+        )
+        return
+
+    if user_id not in ADMIN_USER_IDS:
         await update.message.reply_text("⛔ 无权限。")
         return
 
@@ -550,10 +581,65 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard(user["status"]),
         )
 
+    elif data == "alpha":
+        await query.edit_message_text("🔍 正在扫描聪明钱信号...")
+        try:
+            smart_result = scan_smart_money()
+            hot_tokens = get_hot_tokens(limit=HEAT_TOP_N)
+            leaderboard = get_leaderboard(limit=10)
+        except Exception as e:
+            await query.edit_message_text(
+                f"⚠️ Alpha 扫描出错: {e}\n请稍后重试。",
+                reply_markup=main_menu_keyboard(user["status"]),
+            )
+            return
+
+        tier = tier_of(user)
+        if not hot_tokens:
+            await query.edit_message_text(
+                "📊 *Alpha 信号*\n\n暂无数据。稍后再试！",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=main_menu_keyboard(user["status"]),
+            )
+            return
+
+        # Free 用户只看 Top3 + 升级引导；Pro 看完整 Top10 + 排行
+        top_n = 10 if tier in ("paid", "trial") else 3
+        msg_lines = ["🧠 *Alpha 聪明钱信号*\n", "🔥 *24h 代币热度*\n"]
+        for i, t in enumerate(hot_tokens[:top_n], 1):
+            symbol = t["token_symbol"] or "?"
+            ce = CHAINS.get(t.get("chain", "ethereum"), {}).get("emoji", "📊")
+            msg_lines.append(f"  {i}. {ce} *{symbol}* — 🔥{t['heat_score']}")
+
+        if tier in ("paid", "trial"):
+            total_activity = sum(t["wallet_count"] for t in hot_tokens)
+            msg_lines.append(f"\n📊 总活动: {total_activity} 次聪明钱交易")
+            if leaderboard:
+                msg_lines.append("\n🏆 *聪明钱 Top5*")
+                cat_emoji = {"mm": "🏦", "vc": "💰", "trader": "🧠", "exchange": "🏦", "unknown": "❓"}
+                for w in leaderboard[:5]:
+                    emoji = cat_emoji.get(w.get("category", ""), "🧠")
+                    msg_lines.append(f"  {emoji} {w['nickname']} — ⭐{w['score']}")
+        else:
+            msg_lines.append("\n🔒 _完整 Top10 + 聪明钱排行为 Pro 专享_")
+            msg_lines.append("💎 升级 Pro 解锁 → /pay")
+
+        if smart_result.get("aggr"):
+            digest = smart_result["aggr"].generate_digest()
+            save_daily_digest(digest["date"], digest)
+
+        await query.edit_message_text(
+            "\n".join(msg_lines),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(user["status"]),
+            disable_web_page_preview=True,
+        )
+
     elif data == "pay":
         chain = PAYOUT_CHAIN.upper()
         await query.edit_message_text(
             f"💎 *升级付费版 · ${PRICE_USDT} USDT/月*\n\n"
+
             f"📤 支付到:\n`{PAYOUT_WALLET}`\n({chain} TRC20)\n\n"
             "支付后用 /verify 验证",
             parse_mode=ParseMode.MARKDOWN,
@@ -739,14 +825,16 @@ async def smart_money_loop(app: Application):
             print(f"[{datetime.now():%H:%M:%S}] Scanning smart money...")
             result = scan_smart_money()
 
-            if result.get("alerts"):
-                print(f"  Found {len(result['alerts'])} smart money moves")
+            txs = result.get("txs", [])
+            if txs:
+                print(f"  Found {len(txs)} smart money moves")
 
-                # 推送给所有活跃用户
+                # 推送给所有活跃用户（按 tier 分层：Free 脱敏，Pro 全量）
                 active_users = get_all_active_users()
-                for alert in result["alerts"]:
-                    msg = format_smart_alert(alert)
+                for tx in txs:
                     for user in active_users:
+                        tier = tier_of(user)
+                        msg = format_smart_alert(tx, tier=tier)
                         try:
                             await app.bot.send_message(
                                 chat_id=user["user_id"],
@@ -757,6 +845,7 @@ async def smart_money_loop(app: Application):
                             await asyncio.sleep(0.15)
                         except Exception:
                             pass
+
 
             # 生成日报数据（存库，定时推送用）
             if result.get("aggr"):
@@ -778,7 +867,8 @@ async def digest_push_loop(app: Application):
     print(f"📊 Digest push loop started (target: {DIGEST_HOUR_UTC}:00 UTC)...")
     while True:
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
+
             # 检查是否到了推送时间（小时匹配，且今天还没推送过）
             if now.hour == DIGEST_HOUR_UTC:
                 today = now.strftime("%Y-%m-%d")
@@ -827,7 +917,17 @@ def main():
     init_db()
     print(f"🐋 Whale Tracker Bot starting...")
 
-    app = Application.builder().token(TG_BOT_TOKEN).build()
+    async def post_init(application: Application):
+        # 在 run_polling 创建的事件循环中启动后台协程
+        # 用 asyncio.create_task（而非 application.create_task）：这些是常驻后台循环，
+        # 随进程生命周期运行，不需要 PTB 在关闭时 await，避免 PTBUserWarning。
+        asyncio.create_task(monitoring_loop(application))   # 鲸鱼追踪
+        asyncio.create_task(smart_money_loop(application))  # 聪明钱 Alpha
+        asyncio.create_task(digest_push_loop(application))  # 每日日报推送
+        print("✅ Background loops scheduled (Whale + Smart Money + Digest).")
+
+
+    app = Application.builder().token(TG_BOT_TOKEN).post_init(post_init).build()
 
     # 命令
     app.add_handler(CommandHandler("start", cmd_start))
@@ -848,14 +948,9 @@ def main():
     # 文本消息（地址验证）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_verify_message))
 
-    # 后台监控（3条独立协程）
-    loop = asyncio.get_event_loop()
-    loop.create_task(monitoring_loop(app))       # 鲸鱼追踪
-    loop.create_task(smart_money_loop(app))      # 聪明钱 Alpha
-    loop.create_task(digest_push_loop(app))      # 每日日报推送
-
     print("✅ Bot is running (Whale + Smart Money + Digest). Press Ctrl+C to stop.")
     app.run_polling()
+
 
 
 if __name__ == "__main__":

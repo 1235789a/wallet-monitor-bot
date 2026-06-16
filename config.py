@@ -109,8 +109,21 @@ CHAINS = {
 }
 
 # ============================================================
+# 管理员配置
+# ============================================================
+# 管理员 Telegram ID（逗号分隔），用于 /broadcast 群发等管理功能
+# 用 @userinfobot 查询自己的 TG ID 后填入 .env
+ADMIN_USER_IDS = [
+    int(_id.strip())
+    for _id in os.environ.get("ADMIN_USER_IDS", "").split(",")
+    if _id.strip().isdigit()
+]
+
+
+# ============================================================
 # 聪明钱监控配置
 # ============================================================
+
 # 跟踪哪些链上的聪明钱
 SMART_MONEY_CHAINS = os.environ.get("SMART_MONEY_CHAINS", "ethereum,bsc,tron").split(",")
 # 聪明钱地址更新热度的最低USD阈值

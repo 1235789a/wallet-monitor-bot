@@ -76,9 +76,13 @@ def init_db():
             score INTEGER DEFAULT 50,
             followers INTEGER DEFAULT 0,
             is_active INTEGER DEFAULT 1,
+            tier INTEGER DEFAULT 3,                 -- 1=核心聪明钱 2=可信机构/交易员 3=观察池
+            source TEXT DEFAULT 'unverified',       -- github:eth-labels / arkham / dune / etherscan / user / unverified
+            participate_alpha INTEGER DEFAULT 1,    -- 1=参与Alpha评分 0=仅作资金流向参考(交易所)
             created_at TEXT DEFAULT (datetime('now')),
             UNIQUE(address, chain)
         );
+
 
         CREATE TABLE IF NOT EXISTS token_heat (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,6 +113,38 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+    migrate_smart_wallets()
+
+
+def migrate_smart_wallets():
+    """
+    为已存在的旧库补充 tier / source / participate_alpha 三列。
+    新建库由 CREATE TABLE 直接带这三列，本函数对其为 no-op。
+    """
+    conn = get_conn()
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(smart_wallets)").fetchall()}
+
+    migrations = []
+    if "tier" not in cols:
+        migrations.append("ALTER TABLE smart_wallets ADD COLUMN tier INTEGER DEFAULT 3")
+    if "source" not in cols:
+        migrations.append("ALTER TABLE smart_wallets ADD COLUMN source TEXT DEFAULT 'unverified'")
+    if "participate_alpha" not in cols:
+        migrations.append("ALTER TABLE smart_wallets ADD COLUMN participate_alpha INTEGER DEFAULT 1")
+
+    for sql in migrations:
+        conn.execute(sql)
+
+    if migrations:
+        conn.commit()
+        print(f"[migrate] smart_wallets: applied {len(migrations)} column migration(s)")
+
+    # tier 列已确保存在，可安全建立索引
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sw_tier ON smart_wallets(tier, is_active)")
+    conn.commit()
+    conn.close()
+
+
 
 
 # ============================================================
@@ -391,7 +427,114 @@ def get_all_smart_wallets(chain: str = None) -> list:
     return [dict(r) for r in rows]
 
 
+def get_alpha_smart_wallets(chain: str = None) -> list:
+    """
+    获取参与 Alpha 评分的聪明钱包（participate_alpha=1）。
+    交易所热钱包(participate_alpha=0)会被排除，避免污染代币热度榜。
+    """
+    conn = get_conn()
+    if chain:
+        rows = conn.execute(
+            """SELECT * FROM smart_wallets
+               WHERE is_active = 1 AND participate_alpha = 1 AND chain = ?
+               ORDER BY tier ASC, score DESC""",
+            (chain,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT * FROM smart_wallets
+               WHERE is_active = 1 AND participate_alpha = 1
+               ORDER BY tier ASC, score DESC""",
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_smart_wallets_by_tier(tier: int, chain: str = None) -> list:
+    """按 tier 获取聪明钱包（1=核心 2=可信 3=观察）"""
+    conn = get_conn()
+    if chain:
+        rows = conn.execute(
+            "SELECT * FROM smart_wallets WHERE is_active = 1 AND tier = ? AND chain = ? ORDER BY score DESC",
+            (tier, chain),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM smart_wallets WHERE is_active = 1 AND tier = ? ORDER BY score DESC",
+            (tier,),
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_pool_stats() -> dict:
+    """地址池统计：按 tier / source / 是否参与alpha 汇总，用于 /pool 管理命令"""
+    conn = get_conn()
+    total = conn.execute("SELECT COUNT(*) c FROM smart_wallets WHERE is_active = 1").fetchone()["c"]
+    by_tier = {
+        row["tier"]: row["c"]
+        for row in conn.execute(
+            "SELECT tier, COUNT(*) c FROM smart_wallets WHERE is_active = 1 GROUP BY tier"
+        ).fetchall()
+    }
+    by_source = {
+        row["source"]: row["c"]
+        for row in conn.execute(
+            "SELECT source, COUNT(*) c FROM smart_wallets WHERE is_active = 1 GROUP BY source"
+        ).fetchall()
+    }
+    alpha_count = conn.execute(
+        "SELECT COUNT(*) c FROM smart_wallets WHERE is_active = 1 AND participate_alpha = 1"
+    ).fetchone()["c"]
+    conn.close()
+    return {
+        "total": total,
+        "by_tier": by_tier,
+        "by_source": by_source,
+        "alpha_participants": alpha_count,
+    }
+
+
+def upsert_smart_wallet(address: str, chain: str, nickname: str, category: str,
+                        tier: int = 3, source: str = "unverified",
+                        participate_alpha: int = 1, score: int = 50) -> bool:
+    """
+    插入或更新一条聪明钱地址（带 tier/source/participate_alpha）。
+    已存在则按更高可信度更新（tier 取更小值，source 非 unverified 时覆盖）。
+    返回 True=新插入, False=已存在(已更新)。
+    """
+    conn = get_conn()
+    existing = conn.execute(
+        "SELECT id, tier, source FROM smart_wallets WHERE address = ? AND chain = ?",
+        (address, chain),
+    ).fetchone()
+
+    if existing:
+        new_tier = min(existing["tier"] or 3, tier)
+        new_source = source if source != "unverified" else existing["source"]
+        conn.execute(
+            """UPDATE smart_wallets
+               SET nickname = ?, category = ?, tier = ?, source = ?, participate_alpha = ?
+               WHERE id = ?""",
+            (nickname, category, new_tier, new_source, participate_alpha, existing["id"]),
+        )
+        conn.commit()
+        conn.close()
+        return False
+
+    conn.execute(
+        """INSERT INTO smart_wallets
+           (address, chain, nickname, category, score, tier, source, participate_alpha)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (address, chain, nickname, category, score, tier, source, participate_alpha),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
 def update_smart_wallet_score(address: str, chain: str, score: int) -> None:
+
     """更新聪明钱包评分"""
     conn = get_conn()
     conn.execute(
@@ -515,9 +658,9 @@ def get_daily_digest(date_str: str) -> dict | None:
     ).fetchone()
     conn.close()
     if row:
-        result = dict(row)
-        result["digest"] = json.loads(result["digest_json"])
-        return result
+        digest = json.loads(row["digest_json"])
+        digest["pushed"] = bool(row["pushed"])
+        return digest
     return None
 
 

@@ -504,39 +504,97 @@ def scan_all_chains() -> list:
     return all_results
 
 
-def format_alert(tx: dict) -> str:
-    """格式化推送消息（用户追踪的鲸鱼地址）"""
-    label_line = f"\n🏷 标签: {tx['label']}" if tx.get("label") else ""
+# ====================================================================
+# 统一信号格式 + Free / Pro 分层
+# ====================================================================
 
-    # direction detection
+def _mask_address(addr: str) -> str:
+    """脱敏地址（Free 版只给前 6 位）"""
+    if not addr:
+        return "0x…"
+    return f"{addr[:6]}…"
+
+
+def _full_address(addr: str) -> str:
+    """完整脱敏地址（Pro 版给首尾）"""
+    if not addr:
+        return "0x…"
+    return f"{addr[:10]}...{addr[-6:]}"
+
+
+def format_signal(tx: dict, kind: str = "whale", tier: str = "paid") -> str:
+    """
+    统一的信号格式化入口。
+
+    Parameters
+    ----------
+    tx   : 交易字典
+    kind : 'whale'（用户追踪的鲸鱼）或 'smart'（Alpha 聪明钱）
+    tier : 'paid' / 'trial' 给完整内容；'free' 给脱敏 + 升级引导
+    """
+    is_free = tier not in ("paid", "trial")
+
+    # 方向判断（兼容 smart 信号的 direction 与 whale 的转入/转出）
     if tx.get("direction"):
-        direction = "📤 卖出" if tx["direction"] == "sell" else "📥 买入"
+        dir_emoji = "🟢" if tx["direction"] == "buy" else "🔴"
+        dir_text = "买入" if tx["direction"] == "buy" else "卖出"
     else:
-        direction = "📤 转出" if tx["to"].lower() == tx["tracked_address"].lower() else "📥 转入"
+        tracked = tx.get("tracked_address", "").lower()
+        is_out = tx.get("to", "").lower() == tracked
+        dir_emoji = "📤" if is_out else "📥"
+        dir_text = "转出" if is_out else "转入"
 
-    return f"""{tx['chain_emoji']} *鲸鱼异动 · {tx['chain_name']}*
+    addr = tx.get("tracked_address") or tx.get("wallet_address", "")
 
-{direction}
-💰 {tx['amount']} {tx['token']} (≈${tx['usd_value']})
-📬 地址: `{tx.get('tracked_address', tx.get('wallet_address', ''))[:10]}...{tx.get('tracked_address', tx.get('wallet_address', ''))[-6:]}`{label_line}
+    if kind == "smart":
+        title = f"{tx['chain_emoji']} *Alpha 信号 · {dir_emoji} {dir_text}*"
+        owner = f"\n🏷 聪明钱: {tx.get('wallet_category', '')} {tx.get('wallet_nickname', '')}"
+    else:
+        title = f"{tx['chain_emoji']} *鲸鱼异动 · {tx['chain_name']}*"
+        owner = f"\n🏷 标签: {tx['label']}" if tx.get("label") else ""
 
-🔗 [查看交易]({tx['explorer']})
-⏰ {tx['timestamp'][:19]}"""
+    if is_free:
+        # Free：金额按量级模糊化，地址脱敏，去掉交易链接，附升级引导
+        try:
+            usd = float(tx.get("usd_value", 0))
+        except (TypeError, ValueError):
+            usd = 0.0
+        if usd >= 1_000_000:
+            amount_line = "💰 金额量级: 🐋🐋🐋 百万美元级"
+        elif usd >= 100_000:
+            amount_line = "💰 金额量级: 🐋🐋 十万美元级"
+        else:
+            amount_line = "💰 金额量级: 🐋 万美元级"
+        return (
+            f"{title}\n\n"
+            f"{dir_emoji} {dir_text}{owner}\n"
+            f"{amount_line}\n"
+            f"📬 地址: `{_mask_address(addr)}`\n"
+            f"⏰ {tx['timestamp'][:19]}\n\n"
+            f"🔒 _完整金额 / 地址 / 交易链接为 Pro 专享_\n"
+            f"💎 升级 Pro 解锁实时全量信号 → /pay"
+        )
+
+    # Paid / Trial：完整内容
+    return (
+        f"{title}\n\n"
+        f"{dir_emoji} {dir_text}{owner}\n"
+        f"💰 {tx['amount']} {tx['token']} (≈${tx['usd_value']})\n"
+        f"📬 地址: `{_full_address(addr)}`\n\n"
+        f"🔗 [查看交易]({tx['explorer']})\n"
+        f"⏰ {tx['timestamp'][:19]}"
+    )
 
 
-def format_smart_alert(tx: dict) -> str:
-    """格式化 Alpha 信号推送消息"""
-    direction_emoji = "🟢" if tx.get("direction") == "buy" else "🔴"
-    direction_text = "买入" if tx.get("direction") == "buy" else "卖出"
+def format_alert(tx: dict, tier: str = "paid") -> str:
+    """格式化鲸鱼异动推送（向后兼容封装）"""
+    return format_signal(tx, kind="whale", tier=tier)
 
-    return f"""{tx['chain_emoji']} *Alpha信号 · {direction_emoji} {direction_text}*
 
-🏷 聪明钱: {tx['wallet_category']} {tx['wallet_nickname']}
-💰 {tx['amount']} {tx['token']} (≈${tx['usd_value']})
-📬 地址: `{tx['wallet_address'][:10]}...{tx['wallet_address'][-6:]}`
+def format_smart_alert(tx: dict, tier: str = "paid") -> str:
+    """格式化 Alpha 聪明钱信号推送（向后兼容封装）"""
+    return format_signal(tx, kind="smart", tier=tier)
 
-🔗 [查看交易]({tx['explorer']})
-⏰ {tx['timestamp'][:19]}"""
 
 
 # ============================================================

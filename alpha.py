@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 """
 Alpha Detection · 聪明钱信号聚合器
@@ -12,7 +13,7 @@ import asyncio
 import os
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict, Counter
 
 # 添加当前目录到路径
@@ -23,14 +24,16 @@ from models import (
     update_smart_wallet_score, upsert_token_heat,
     get_hot_tokens, save_daily_digest, get_daily_digest,
     mark_digest_pushed, reset_daily_token_heat,
-    get_leaderboard,
+    get_leaderboard, get_alpha_smart_wallets, get_pool_stats,
 )
 from scorer import estimate_score_from_onchain, calculate_score
+from alpha_score import compute_alpha_score, signal_strength_label
 from config import (
     SMART_MONEY_CHAINS, SMART_USD_THRESHOLD,
     HEAT_TOP_N, CHAINS,
 )
-from seed_wallets import seed_database, CATEGORY_EMOJI, CATEGORY_LABEL
+from seed_wallets import seed_database, CATEGORY_EMOJI, CATEGORY_LABEL, TIER_LABEL
+
 
 
 # ============================================================
@@ -52,6 +55,11 @@ class AlphaAggregator:
             "total_usd": 0.0,
             "buyers": [],
             "sellers": [],
+            "tier_counts": Counter(),
+            "buy_count": 0,
+            "sell_count": 0,
+            "first_ts": None,
+            "last_ts": None,
         })
         self.token_sells = defaultdict(lambda: {
             "wallet_count": 0,
@@ -61,7 +69,7 @@ class AlphaAggregator:
 
     def add_tx(self, chain: str, token_address: str, token_symbol: str,
                token_name: str, direction: str, usd_value: float,
-               wallet_info: str):
+               wallet_info: str, tier: int = 3, ts: datetime = None):
         """
         添加一笔聪明钱交易
 
@@ -69,24 +77,39 @@ class AlphaAggregator:
         ----------
         direction : 'buy' or 'sell'
         wallet_info : 钱包nickname
+        tier : 钱包层级 (1=核心聪明钱, 2=可信机构, 3=观察池)
+        ts : 交易时间（UTC），用于计算活跃度；缺省取当前时间
         """
         key = f"{chain}:{token_address}"
+        ts = ts or datetime.now(timezone.utc)
+
+        # buy/sell 命中率与活跃度统计都挂在 buy entry 上，作为该代币的综合信号
+        entry = self.token_buys[key]
+        entry["address"] = token_address
+        entry["symbol"] = token_symbol
+        entry["name"] = token_name
+        entry["chain"] = chain
+        if entry["first_ts"] is None or ts < entry["first_ts"]:
+            entry["first_ts"] = ts
+        if entry["last_ts"] is None or ts > entry["last_ts"]:
+            entry["last_ts"] = ts
 
         if direction == "buy":
-            entry = self.token_buys[key]
-            entry["address"] = token_address
-            entry["symbol"] = token_symbol
-            entry["name"] = token_name
-            entry["chain"] = chain
             entry["wallet_count"] += 1
             entry["total_usd"] += usd_value
             entry["buyers"].append(f"{wallet_info}(${usd_value:,.0f})")
+            entry["tier_counts"][tier] += 1
+            entry["buy_count"] += 1
 
         elif direction == "sell":
-            entry = self.token_sells[key]
-            entry["wallet_count"] += 1
-            entry["total_usd"] += usd_value
+            entry["sell_count"] += 1
             entry["sellers"].append(f"{wallet_info}(${usd_value:,.0f})")
+
+            sell_entry = self.token_sells[key]
+            sell_entry["wallet_count"] += 1
+            sell_entry["total_usd"] += usd_value
+            sell_entry["sellers"].append(f"{wallet_info}(${usd_value:,.0f})")
+
 
     def flush_to_db(self):
         """将缓存数据写入数据库"""
@@ -168,12 +191,50 @@ class AlphaAggregator:
         sections.append("\n".join(summary_lines))
 
         return {
-            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "hot_tokens": [dict(t) for t in hot],
             "leaderboard": [dict(w) for w in leaderboard],
             "total_activity": sum(t["wallet_count"] for t in hot),
             "message": "\n".join(sections),
         }
+
+    def rank_alpha_signals(self) -> list:
+        """
+        基于本轮缓存的交易，对每个代币计算 Alpha Score 并降序排名。
+
+        Returns
+        -------
+        list[dict] —— 每个元素含 symbol/chain/alpha_score/label/components
+        """
+        now = datetime.now(timezone.utc)
+        results = []
+        for key, data in self.token_buys.items():
+            # 平均距今小时数（用 first/last 的中点近似活跃度）
+            last_ts = data["last_ts"] or now
+            recency_hours = max(0.0, (now - last_ts).total_seconds() / 3600.0)
+
+            scored = compute_alpha_score(
+                tier_counts=dict(data["tier_counts"]),
+                buy_count=data["buy_count"],
+                sell_count=data["sell_count"],
+                total_usd=data["total_usd"],
+                recency_hours=recency_hours,
+            )
+            results.append({
+                "chain": data["chain"],
+                "symbol": data["symbol"],
+                "name": data["name"],
+                "address": data["address"],
+                "alpha_score": scored["alpha_score"],
+                "label": signal_strength_label(scored["alpha_score"]),
+                "buyers": data["buyers"],
+                "sellers": data["sellers"],
+                "components": scored["components"],
+            })
+
+        results.sort(key=lambda r: r["alpha_score"], reverse=True)
+        return results
+
 
 
 # ============================================================
@@ -254,22 +315,22 @@ if __name__ == "__main__":
     # 演示：模拟一些交易数据
     aggr = AlphaAggregator()
 
-    # 模拟多个聪明钱买入同个代币
+    # 模拟多个聪明钱买入同个代币 —— 末位为 tier (1=核心, 2=机构, 3=观察池)
     sample_trades = [
-        ("ethereum", "0xabc001", "PEPE", "Pepe", "buy", 50000, "Wintermute 🏦"),
-        ("ethereum", "0xabc001", "PEPE", "Pepe", "buy", 30000, "Jump Trading 🏦"),
-        ("ethereum", "0xabc001", "PEPE", "Pepe", "buy", 25000, "GSR Markets 🏦"),
-        ("bsc", "0xbsc001", "FLOKI", "Floki", "buy", 15000, "DWF Labs BSC 🏦"),
-        ("bsc", "0xbsc001", "FLOKI", "Floki", "buy", 12000, "Binance Labs 💰"),
-        ("ethereum", "0xabc002", "WIF", "dogwifhat", "buy", 80000, "Wintermute 🏦"),
-        ("ethereum", "0xabc002", "WIF", "dogwifhat", "buy", 45000, "a16z 💰"),
-        ("ethereum", "0xabc001", "PEPE", "Pepe", "sell", 20000, "Smart Trader 1 🧠"),
-        ("ethereum", "0xabc003", "BONK", "Bonk", "buy", 60000, "Jump Trading 🏦"),
+        ("ethereum", "0xabc001", "PEPE", "Pepe", "buy", 50000, "Wintermute 🏦", 1),
+        ("ethereum", "0xabc001", "PEPE", "Pepe", "buy", 30000, "Jump Trading 🏦", 1),
+        ("ethereum", "0xabc001", "PEPE", "Pepe", "buy", 25000, "GSR Markets 🏦", 1),
+        ("bsc", "0xbsc001", "FLOKI", "Floki", "buy", 15000, "DWF Labs BSC 🏦", 1),
+        ("bsc", "0xbsc001", "FLOKI", "Floki", "buy", 12000, "Binance Labs 💰", 1),
+        ("ethereum", "0xabc002", "WIF", "dogwifhat", "buy", 80000, "Wintermute 🏦", 1),
+        ("ethereum", "0xabc002", "WIF", "dogwifhat", "buy", 45000, "a16z 💰", 1),
+        ("ethereum", "0xabc001", "PEPE", "Pepe", "sell", 20000, "Smart Trader 1 🧠", 3),
+        ("ethereum", "0xabc003", "BONK", "Bonk", "buy", 60000, "Jump Trading 🏦", 1),
     ]
 
     for trade in sample_trades:
-        chain, addr, sym, name, direction, usd, wallet = trade
-        aggr.add_tx(chain, addr, sym, name, direction, usd, wallet)
+        chain, addr, sym, name, direction, usd, wallet, tier = trade
+        aggr.add_tx(chain, addr, sym, name, direction, usd, wallet, tier=tier)
 
     # 写入数据库
     aggr.flush_to_db()
@@ -277,4 +338,23 @@ if __name__ == "__main__":
     # 生成并显示日报
     digest = aggr.generate_digest()
     print("\n" + digest["message"])
+
+    # Alpha Score 排行
+    print("\n" + "=" * 50)
+    print("🎯 Alpha Score 信号排行")
+    print("=" * 50)
+    for r in aggr.rank_alpha_signals():
+        c = r["components"]
+        print(
+            f"  {r['symbol']:<6} [{r['chain']}] "
+            f"Alpha={r['alpha_score']:>3}  {r['label']}"
+        )
+        print(
+            f"         tier加权={c['tier_weighted']} | 地址={c['addr_count']} | "
+            f"买/卖={c['buy_count']}/{c['sell_count']} | "
+            f"命中率={c['hit_rate']} | ${c['total_usd']:,.0f}"
+        )
+
     print("\n✅ Alpha detection test complete.")
+
+
