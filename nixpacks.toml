@@ -1,0 +1,8 @@
+# Nixpacks 不会读取 runtime.txt（那是 Heroku 约定）。
+# 在这里显式锁定 Python 版本，保证 Railway 构建环境与本地/runtime.txt 一致，
+# 避免因 Railway 默认 Python 版本偏旧而出现 SyntaxError。
+[phases.setup]
+nixPkgs = ["python311", "gcc"]
+
+[start]
+cmd = "python bot.py"
