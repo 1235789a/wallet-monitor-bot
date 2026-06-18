@@ -18,6 +18,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import Conflict, NetworkError, TimedOut
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
@@ -903,6 +904,34 @@ async def digest_push_loop(app: Application):
 
 
 # ============================================================
+# 全局错误处理
+# ============================================================
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """全局错误处理器。
+
+    - Conflict：同一个 token 有多个实例在 getUpdates。这是部署/运维问题
+      （多副本、本地与云端同时跑、重复部署未停旧实例），代码层无法根治，
+      这里只做降噪日志，避免刷屏。
+    - 网络类（NetworkError/TimedOut）：常见瞬时抖动，PTB 会自动重试，记一行即可。
+    - 其它异常：打印完整 traceback 方便排查。
+    """
+    err = context.error
+
+    if isinstance(err, Conflict):
+        print("⚠️ Conflict: 检测到另一个机器人实例正在用同一 token 轮询。"
+              "请确认只有一个实例在运行（Railway 副本数=1，且未在本地同时运行）。")
+        return
+
+    if isinstance(err, (NetworkError, TimedOut)):
+        print(f"🌐 网络瞬时错误（将自动重试）: {err}")
+        return
+
+    print(f"❌ 未处理异常: {err}")
+    traceback.print_exception(type(err), err, err.__traceback__)
+
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -953,8 +982,13 @@ def main():
     # 文本消息（地址验证）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_verify_message))
 
+    # 全局错误处理器（优雅处理 Conflict / 网络抖动等）
+    app.add_error_handler(error_handler)
+
     print("✅ Bot is running (Whale + Smart Money + Digest). Press Ctrl+C to stop.")
-    app.run_polling()
+    # drop_pending_updates=True：启动时丢弃积压的旧 update，
+    # 避免重启/重新部署后把堆积的消息一次性重放，也降低与旧实例的冲突窗口。
+    app.run_polling(drop_pending_updates=True)
 
 
 
