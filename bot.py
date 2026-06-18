@@ -31,15 +31,20 @@ from config import (
     FREE_WALLET_LIMIT, PAID_WALLET_LIMIT, MIN_USD_VALUE,
     SMART_MONEY_CHAINS, HEAT_TOP_N, DIGEST_HOUR_UTC,
     CHAINS, ADMIN_USER_IDS,
+    ETHERSCAN_API_KEY, BSCSCAN_API_KEY, TRONGRID_API_KEY,
 )
 
 from models import (
-    init_db, upsert_user, activate_paid, is_user_active,
+    init_db, get_conn, upsert_user, activate_paid, is_user_active,
     add_tracked_wallet, remove_tracked_wallet, get_user_wallets,
     get_all_active_users, save_tx_history,
     get_hot_tokens, get_leaderboard, save_daily_digest, get_daily_digest,
     mark_digest_pushed, get_all_smart_wallets, get_smart_wallet,
+    get_users_count, get_tracked_wallets_count, get_smart_wallets_count,
+    get_token_heat_count, get_daily_digest_count, upsert_token_heat,
 )
+from seed_wallets import seed_database
+
 from payment import check_payment, validate_wallet_address, detect_chain_from_address
 from monitor import (
     scan_all_chains, format_alert, scan_smart_money, format_smart_alert,
@@ -495,7 +500,8 @@ async def cmd_smart_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg_lines.append(
             f"  {chain_emoji} {cat} {w['nickname']} — ⭐{score}"
         )
-        msg_lines.append(f"    `{w['wallet_address'][:10]}...{w['wallet_address'][-6:]}`")
+        addr = w.get("address", "")
+        msg_lines.append(f"    `{addr[:10]}...{addr[-6:]}`")
 
     await update.message.reply_text(
         "\n".join(msg_lines),

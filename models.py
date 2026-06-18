@@ -679,6 +679,49 @@ def mark_digest_pushed(date_str: str) -> None:
 
 
 # ============================================================
+# 数据库统计
+# ============================================================
+
+def get_table_count(table_name: str) -> int:
+    """获取指定表的记录数"""
+    conn = get_conn()
+    row = conn.execute(f"SELECT COUNT(*) as cnt FROM {table_name}").fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+def get_users_count() -> int:
+    """获取用户总数"""
+    return get_table_count("users")
+
+
+def get_tracked_wallets_count() -> int:
+    """获取活跃追踪钱包总数"""
+    conn = get_conn()
+    row = conn.execute("SELECT COUNT(*) as cnt FROM tracked_wallets WHERE active = 1").fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+def get_smart_wallets_count() -> int:
+    """获取聪明钱包总数"""
+    conn = get_conn()
+    row = conn.execute("SELECT COUNT(*) as cnt FROM smart_wallets WHERE is_active = 1").fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+def get_token_heat_count() -> int:
+    """获取代币热度记录数"""
+    return get_table_count("token_heat")
+
+
+def get_daily_digest_count() -> int:
+    """获取每日摘要记录数"""
+    return get_table_count("daily_digest")
+
+
+# ============================================================
 # 初始化
 # ============================================================
 if __name__ == "__main__":
