@@ -14,9 +14,15 @@ DB = DATABASE_PATH
 def get_conn():
     """获取数据库连接（自动创建目录）"""
     os.makedirs(os.path.dirname(os.path.abspath(DB)), exist_ok=True)
-    conn = sqlite3.connect(DB)
+    # timeout 让写操作在锁竞争时等待而非立即抛错
+    conn = sqlite3.connect(DB, timeout=30)
     conn.row_factory = sqlite3.Row
+    # WAL 模式允许读写并发，显著降低高频监控下的 "database is locked"
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
+
 
 
 def init_db():

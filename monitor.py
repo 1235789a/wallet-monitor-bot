@@ -11,8 +11,35 @@ from datetime import datetime, timedelta
 from config import (
     CHAINS, STABLECOIN_CONTRACTS, MIN_USD_VALUE,
     ETHERSCAN_API_KEY, BSCSCAN_API_KEY, TRONGRID_API_KEY,
-    SMART_MONEY_CHAINS, SMART_USD_THRESHOLD,
+    SMART_MONEY_CHAINS, SMART_USD_THRESHOLD, SMART_MIN_TOKEN_AMOUNT,
+    ETHERSCAN_V2_URL,
 )
+
+# 稳定币符号集合（用于估值判定）
+_STABLE_SYMBOLS = ("USDT", "USDC", "USDT.e", "BUSD", "DAI", "TUSD", "FDUSD")
+
+
+def _evm_api(chain_key: str):
+    """
+    返回 (url, base_params, api_key)，统一走 Etherscan V2 多链端点。
+    V2 用一个 Etherscan key + chainid 覆盖所有 EVM 链（V1 端点已被官方弃用）。
+    若该链单独配了 key（如 BSCSCAN_API_KEY）则优先用它，否则回退到 ETHERSCAN_API_KEY。
+    """
+    chain = CHAINS.get(chain_key)
+    if not chain or chain.get("type") != "evm":
+        return None, None, None
+
+    chain_specific = BSCSCAN_API_KEY if chain_key == "bsc" else ""
+    api_key = chain_specific or ETHERSCAN_API_KEY
+    if not api_key:
+        return None, None, None
+
+    chainid = chain.get("chainid")
+    if chainid:
+        return ETHERSCAN_V2_URL, {"chainid": chainid}, api_key
+    # 没有 chainid 的兜底：用旧的 V1 端点
+    return chain["api_url"], {}, api_key
+
 from models import (
     get_all_active_wallets, was_tx_pushed, save_tx_history,
     get_all_smart_wallets, get_smart_wallet,
@@ -42,7 +69,7 @@ def fetch_evm_transfers(chain_key: str, tracked_addresses: list) -> list:
     if not chain:
         return []
 
-    api_key = ETHERSCAN_API_KEY if chain_key == "ethereum" else BSCSCAN_API_KEY
+    url, base_params, api_key = _evm_api(chain_key)
     if not api_key:
         return []
 
@@ -50,6 +77,7 @@ def fetch_evm_transfers(chain_key: str, tracked_addresses: list) -> list:
 
     for addr, user_id, label in tracked_addresses:
         params = {
+            **base_params,
             "module": "account",
             "action": "tokentx",
             "address": addr,
@@ -59,7 +87,7 @@ def fetch_evm_transfers(chain_key: str, tracked_addresses: list) -> list:
             "apikey": api_key,
         }
         try:
-            resp = requests.get(chain["api_url"], params=params, timeout=15)
+            resp = requests.get(url, params=params, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("status") == "1":
@@ -71,6 +99,7 @@ def fetch_evm_transfers(chain_key: str, tracked_addresses: list) -> list:
                         token_symbol = tx.get("tokenSymbol", "UNKNOWN")
 
                         usd_value = amount if token_symbol in ("USDT", "USDC", "USDT.e") else 0
+
                         if usd_value < MIN_USD_VALUE:
                             continue
 
@@ -113,7 +142,7 @@ def fetch_evm_native_transfers(chain_key: str, tracked_addresses: list) -> list:
     if not chain:
         return []
 
-    api_key = ETHERSCAN_API_KEY if chain_key == "ethereum" else BSCSCAN_API_KEY
+    url, base_params, api_key = _evm_api(chain_key)
     if not api_key:
         return []
 
@@ -121,6 +150,7 @@ def fetch_evm_native_transfers(chain_key: str, tracked_addresses: list) -> list:
 
     for addr, user_id, label in tracked_addresses:
         params = {
+            **base_params,
             "module": "account",
             "action": "txlist",
             "address": addr,
@@ -130,13 +160,14 @@ def fetch_evm_native_transfers(chain_key: str, tracked_addresses: list) -> list:
             "apikey": api_key,
         }
         try:
-            resp = requests.get(chain["api_url"], params=params, timeout=15)
+            resp = requests.get(url, params=params, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("status") == "1":
                     for tx in data.get("result", []):
                         raw_value = tx.get("value", "0")
                         amount = float(raw_value) / 1e18
+
 
                         eth_price = 2000 if chain_key == "ethereum" else 300
                         usd_value = amount * eth_price
@@ -257,7 +288,7 @@ def fetch_smart_money_evm(chain_key: str, smart_addresses: list) -> list:
     if not chain:
         return []
 
-    api_key = ETHERSCAN_API_KEY if chain_key == "ethereum" else BSCSCAN_API_KEY
+    url, base_params, api_key = _evm_api(chain_key)
     if not api_key:
         return []
 
@@ -265,6 +296,7 @@ def fetch_smart_money_evm(chain_key: str, smart_addresses: list) -> list:
 
     for addr, nickname, category in smart_addresses:
         params = {
+            **base_params,
             "module": "account",
             "action": "tokentx",
             "address": addr,
@@ -275,7 +307,7 @@ def fetch_smart_money_evm(chain_key: str, smart_addresses: list) -> list:
             "apikey": api_key,
         }
         try:
-            resp = requests.get(chain["api_url"], params=params, timeout=15)
+            resp = requests.get(url, params=params, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("status") == "1":
@@ -287,17 +319,23 @@ def fetch_smart_money_evm(chain_key: str, smart_addresses: list) -> list:
                         token_symbol = tx.get("tokenSymbol", "UNKNOWN")
                         token_name = tx.get("tokenName", token_symbol)
 
-                        # 稳定币估值 1:1，其他估算或忽略
-                        if token_symbol in ("USDT", "USDC", "USDT.e", "BUSD"):
+                        # 估值与过滤（方案B）：
+                        # - 稳定币：可 1:1 估值，用 USD 阈值过滤，usd_value 真实有效
+                        # - 非稳定币：缺少价格源，不再瞎猜 USD（旧代码 amount*0.01 是错的）。
+                        #   改用"代币数量"弱过滤挡掉 dust，热度完全靠"被多少聪明钱买入"
+                        #   的钱包计数来体现（见 AlphaAggregator / upsert_token_heat）。
+                        is_stable = token_symbol in _STABLE_SYMBOLS
+                        if is_stable:
                             usd_value = amount
+                            if usd_value < SMART_USD_THRESHOLD:
+                                continue
                         else:
-                            # 非稳定币暂用0（实际应接入价格API）
-                            usd_value = amount * 0.01  # 粗略估计
-
-                        if usd_value < SMART_USD_THRESHOLD:
-                            continue
+                            usd_value = 0.0  # 未知价格，不参与 USD 估值
+                            if amount < SMART_MIN_TOKEN_AMOUNT:
+                                continue
 
                         timestamp = int(tx.get("timeStamp", "0"))
+
                         tx_time = datetime.fromtimestamp(timestamp)
                         if tx_time < datetime.now() - timedelta(hours=24):
                             continue

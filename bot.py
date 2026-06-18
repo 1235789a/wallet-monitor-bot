@@ -25,7 +25,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 from config import (
-    TG_BOT_TOKEN, PAYOUT_WALLET, PAYOUT_CHAIN, PRICE_USDT,
+    TG_BOT_TOKEN, TG_PROXY, PAYOUT_WALLET, PAYOUT_CHAIN, PRICE_USDT,
     TRIAL_DAYS, SUBSCRIPTION_DAYS, CHECK_INTERVAL_MINUTES,
     FREE_WALLET_LIMIT, PAID_WALLET_LIMIT, MIN_USD_VALUE,
     SMART_MONEY_CHAINS, HEAT_TOP_N, DIGEST_HOUR_UTC,
@@ -927,7 +927,12 @@ def main():
         print("✅ Background loops scheduled (Whale + Smart Money + Digest).")
 
 
-    app = Application.builder().token(TG_BOT_TOKEN).post_init(post_init).build()
+    builder = Application.builder().token(TG_BOT_TOKEN).post_init(post_init)
+    if TG_PROXY:
+        # 国内网络通过本地代理访问 Telegram；同时给主请求和 get_updates 长轮询挂代理
+        builder = builder.proxy(TG_PROXY).get_updates_proxy(TG_PROXY)
+        print(f"🌐 Using proxy: {TG_PROXY}")
+    app = builder.build()
 
     # 命令
     app.add_handler(CommandHandler("start", cmd_start))

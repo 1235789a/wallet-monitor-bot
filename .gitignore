@@ -6,3 +6,10 @@ last_state.json
 .env
 __pycache__/
 _gh_api.py
+_check_imports.py
+_check_run.py
+*.log
+*.err
+*.zip
+
+

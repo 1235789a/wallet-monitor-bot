@@ -62,10 +62,13 @@ class AlphaAggregator:
             "last_ts": None,
         })
         self.token_sells = defaultdict(lambda: {
+            "symbol": "",
+            "name": "",
             "wallet_count": 0,
             "total_usd": 0.0,
             "sellers": [],
         })
+
 
     def add_tx(self, chain: str, token_address: str, token_symbol: str,
                token_name: str, direction: str, usd_value: float,
@@ -106,9 +109,12 @@ class AlphaAggregator:
             entry["sellers"].append(f"{wallet_info}(${usd_value:,.0f})")
 
             sell_entry = self.token_sells[key]
+            sell_entry["symbol"] = token_symbol
+            sell_entry["name"] = token_name
             sell_entry["wallet_count"] += 1
             sell_entry["total_usd"] += usd_value
             sell_entry["sellers"].append(f"{wallet_info}(${usd_value:,.0f})")
+
 
 
     def flush_to_db(self):

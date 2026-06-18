@@ -108,7 +108,39 @@ def compute_avg_roi(tx_list: list) -> float:
     return sum(rois) / len(rois) if rois else 0.0
 
 
+def compute_avg_hold_hours(tx_list: list, default: float = 24.0) -> float:
+    """
+    根据交易记录中的时间戳估算平均持仓时长（小时）。
+
+    每笔已卖出的 tx 若同时含 buy_ts 与 sell_ts（datetime 或 epoch 秒），
+    则计入 (sell_ts - buy_ts)。无任何可用时间戳时回退到 default。
+    """
+    def _to_seconds(v):
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v.timestamp()
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    durations = []
+    for t in tx_list:
+        if not t.get("sold"):
+            continue
+        buy = _to_seconds(t.get("buy_ts"))
+        sell = _to_seconds(t.get("sell_ts"))
+        if buy is not None and sell is not None and sell >= buy:
+            durations.append((sell - buy) / 3600.0)
+
+    if not durations:
+        return default
+    return sum(durations) / len(durations)
+
+
 def estimate_score_from_onchain(tx_list: list) -> dict:
+
     """
     从链上交易记录估算评分
     返回 {"score": int, "details": dict}
@@ -124,8 +156,9 @@ def estimate_score_from_onchain(tx_list: list) -> dict:
     unique_tokens = len(set(t.get("token", "") for t in tx_list))
     tx_count_7d = len(tx_list)
 
-    # 估算持仓时间（无法精确知道，默认24h）
-    avg_hold_hours = 24.0
+    # 估算持仓时间：有时间戳则按实际计算，否则回退默认24h
+    avg_hold_hours = compute_avg_hold_hours(tx_list, default=24.0)
+
 
     score = calculate_score(
         win_rate=win_rate,

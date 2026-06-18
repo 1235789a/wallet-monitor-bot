@@ -27,12 +27,21 @@ if os.path.exists(_ENV_FILE):
 # ============================================================
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 
+# 代理（国内网络访问 Telegram 需要）。例如 http://127.0.0.1:7890
+# 不填则直连。
+TG_PROXY = os.environ.get("TG_PROXY", "").strip()
+
 # ============================================================
 # 链上 API Key
 # ============================================================
 ETHERSCAN_API_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
 BSCSCAN_API_KEY = os.environ.get("BSCSCAN_API_KEY", "")
 TRONGRID_API_KEY = os.environ.get("TRONGRID_API_KEY", "")
+
+# Etherscan V2 多链统一端点。一个 Etherscan key 即可覆盖 ETH(chainid=1)/BSC(56) 等所有 EVM 链。
+# V1 端点(api.etherscan.io/api、api.bscscan.com/api)已被官方逐步弃用。
+ETHERSCAN_V2_URL = "https://api.etherscan.io/v2/api"
+
 
 # ============================================================
 # USDT 收款配置
@@ -83,6 +92,7 @@ CHAINS = {
         "name": "Ethereum",
         "emoji": "🔷",
         "type": "evm",
+        "chainid": 1,
         "api_url": "https://api.etherscan.io/api",
         "api_key_env": "ETHERSCAN_API_KEY",
         "explorer": "https://etherscan.io",
@@ -92,11 +102,13 @@ CHAINS = {
         "name": "BSC",
         "emoji": "🟡",
         "type": "evm",
+        "chainid": 56,
         "api_url": "https://api.bscscan.com/api",
         "api_key_env": "BSCSCAN_API_KEY",
         "explorer": "https://bscscan.com",
         "native_symbol": "BNB",
     },
+
     "tron": {
         "name": "Tron",
         "emoji": "🔴",
@@ -126,8 +138,12 @@ ADMIN_USER_IDS = [
 
 # 跟踪哪些链上的聪明钱
 SMART_MONEY_CHAINS = os.environ.get("SMART_MONEY_CHAINS", "ethereum,bsc,tron").split(",")
-# 聪明钱地址更新热度的最低USD阈值
+# 聪明钱地址更新热度的最低USD阈值（仅用于稳定币交易，因为只有稳定币能 1:1 估值）
 SMART_USD_THRESHOLD = float(os.environ.get("SMART_USD_THRESHOLD", "5000"))
+# 非稳定币交易的最低"代币数量"弱过滤阈值（防 dust/灰尘交易，绕开缺少价格源的估值难题）
+# 方案B：非稳定币不再用 USD 阈值过滤，改用"被多个聪明钱买入"的钱包数作为热度信号
+SMART_MIN_TOKEN_AMOUNT = float(os.environ.get("SMART_MIN_TOKEN_AMOUNT", "1"))
+
 # 每日摘要推送时间（UTC）
 DIGEST_HOUR_UTC = int(os.environ.get("DIGEST_HOUR_UTC", "12"))
 # 热度榜Top N
