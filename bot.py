@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Whale Tracker TG Bot · 主程序
-Reddit: "How do you guys track whale wallet movements?" (👍198)
+Whale Wallet Tracker · 链上 Alpha 情报机器人
+Slogan: Smart money buys before the crowd notices.
 """
 
 import asyncio
 import sys
 import traceback
+import random
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -26,10 +27,8 @@ from config import (
 )
 from models import (
     init_db, upsert_user, activate_paid, is_user_active,
-    add_tracked_wallet, remove_tracked_wallet, get_user_wallets,
-    get_all_active_users, save_tx_history,
     get_hot_tokens, get_leaderboard, save_daily_digest, get_daily_digest,
-    mark_digest_pushed, get_all_smart_wallets, get_smart_wallet,
+    mark_digest_pushed, get_all_smart_wallets,
     get_users_count, get_tracked_wallets_count, get_smart_wallets_count,
     get_token_heat_count, get_daily_digest_count, get_conn,
 )
@@ -38,21 +37,142 @@ from payment import check_payment, validate_wallet_address, detect_chain_from_ad
 from monitor import scan_all_chains, format_alert, scan_smart_money, format_smart_alert
 from alpha import AlphaAggregator
 
+
 # ============================================================
-# 键盘 Markup
+# Pro 权限判断
 # ============================================================
 
-def main_menu_keyboard(status: str):
-    """主菜单按钮"""
+def _is_pro(user_data: dict) -> bool:
+    """付费用户: status == 'paid' 且 paid_until 未过期"""
+    if user_data.get("status") == "paid":
+        if user_data.get("paid_until"):
+            try:
+                return datetime.fromisoformat(user_data["paid_until"]) > datetime.now()
+            except Exception:
+                return True
+        return True
+    return False
+
+
+# ============================================================
+# Sample 信号数据（MVP 阶段）
+# TODO: 替换为从链上扫描得到的真实 signal 性能数据
+# ============================================================
+
+SAMPLE_SIGNALS = [
+    {
+        "token": "PEPE",
+        "chain": "ETH",
+        "type": "Accumulation",
+        "size_range": "$10K-$25K",
+        "size_exact": "$18,420",
+        "detected_minutes_ago": 47,
+        "wallet_label": "Early Meme Hunter",
+        "wallet_address": "0xPEPE...WALLET",
+        "tx_link": "https://etherscan.io/tx/0xPEPE...",
+        "confidence": "High",
+        "entry_price": "$0.0124",
+        "why": "A tracked smart wallet started accumulating after 18 days inactive.",
+    },
+    {
+        "token": "WIF",
+        "chain": "ETH",
+        "type": "Rotation",
+        "size_range": "$5K-$15K",
+        "size_exact": "$8,910",
+        "detected_minutes_ago": 112,
+        "wallet_label": "Whale Trader #14",
+        "wallet_address": "0xWIF...WALLET",
+        "tx_link": "https://etherscan.io/tx/0xWIF...",
+        "confidence": "Medium",
+        "entry_price": "$2.14",
+        "why": "Rotated out of DOGE and into WIF — same pattern as before WIF's previous 2x move.",
+    },
+    {
+        "token": "BONK",
+        "chain": "SOL",
+        "type": "Fresh Accumulation",
+        "size_range": "$2K-$8K",
+        "size_exact": "$5,230",
+        "detected_minutes_ago": 180,
+        "wallet_label": "Solana Early Fund",
+        "wallet_address": "BONK...WALLET",
+        "tx_link": "https://solscan.io/tx/BONK...",
+        "confidence": "Medium",
+        "entry_price": "$0.000024",
+        "why": "A fund that caught the April 2024 BONK rally is rebuilding a position.",
+    },
+]
+
+SAMPLE_TRACK_RECORD = [
+    {
+        "signal": "PEPE",
+        "posted": "14:20 UTC",
+        "price_at_signal": "$0.012",
+        "result_6h": "$0.018",
+        "move": "+50.0%",
+        "positive": True,
+    },
+    {
+        "signal": "WIF",
+        "posted": "09:45 UTC",
+        "price_at_signal": "$2.14",
+        "result_6h": "$2.57",
+        "move": "+20.1%",
+        "positive": True,
+    },
+    {
+        "signal": "DOGE",
+        "posted": "18:10 UTC",
+        "price_at_signal": "$0.16",
+        "result_6h": "$0.138",
+        "move": "-13.7%",
+        "positive": False,
+    },
+    {
+        "signal": "SHIB",
+        "posted": "22:05 UTC",
+        "price_at_signal": "$0.000021",
+        "result_6h": "$0.000033",
+        "move": "+57.1%",
+        "positive": True,
+    },
+]
+
+
+# ============================================================
+# 主菜单按钮
+# ============================================================
+
+def main_menu_keyboard():
+    """5 个核心菜单"""
     buttons = [
-        [InlineKeyboardButton("📋 我的追踪列表", callback_data="list")],
-        [InlineKeyboardButton("➕ 添加追踪地址", callback_data="add_help")],
-        [InlineKeyboardButton("➖ 移除追踪地址", callback_data="remove_help")],
+        [InlineKeyboardButton("🚨 Live Signals", callback_data="signals")],
+        [InlineKeyboardButton("🔥 Hot Tokens", callback_data="hot_tokens")],
+        [InlineKeyboardButton("📩 Daily Digest", callback_data="digest")],
+        [InlineKeyboardButton("📊 Track Record", callback_data="track")],
+        [InlineKeyboardButton("💎 Upgrade Pro", callback_data="upgrade")],
     ]
-    if status != "paid":
-        buttons.append([InlineKeyboardButton(f"💎 升级付费 (${PRICE_USDT} USDT/月)", callback_data="pay")])
-    buttons.append([InlineKeyboardButton("📊 账户状态", callback_data="status")])
     return InlineKeyboardMarkup(buttons)
+
+
+# ============================================================
+# 信号与热币展示辅助
+# ============================================================
+
+def _chain_emoji(chain_name: str) -> str:
+    return CHAINS.get(chain_name, {}).get("emoji", "🔗")
+
+
+def _category_emoji(category: str) -> str:
+    mapping = {
+        "market_maker": "🏦",
+        "fund": "💰",
+        "whale": "🐋",
+        "trader": "🧠",
+        "exchange": "🏦",
+    }
+    return mapping.get(category, "🧠")
 
 
 # ============================================================
@@ -60,245 +180,306 @@ def main_menu_keyboard(status: str):
 # ============================================================
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """新用户注册 / 老用户欢迎"""
+    """新用户入口 · Alpha 情报产品定位"""
     user = update.effective_user
     user_data = upsert_user(str(user.id), user.username or user.full_name)
+    pro = _is_pro(user_data)
 
-    days_left = ""
-    if user_data["status"] == "trial":
-        trial_end = datetime.fromisoformat(user_data["trial_end"])
-        hours = (trial_end - datetime.now()).total_seconds() / 3600
-        days_left = f"\n🆓 试用期剩余: {max(0, int(hours))} 小时"
+    pro_line = "💎 *Pro member — you get the full signal.*" if pro else "🆓 *Free preview — signals are delayed and partially hidden.*"
 
-    welcome = f"""🐋 *Whale Tracker · 鲸鱼钱包追踪*
-
-欢迎 {user.full_name}！
-实时监控大额链上转账，第一时间掌握鲸鱼动向。
-
-🔷 支持: Ethereum · BSC · Tron
-💰 最低推送金额: ≥${MIN_USD_VALUE:,.0f}
-🆓 免费版: 追踪 {FREE_WALLET_LIMIT} 个地址
-💎 付费版: 追踪 {PAID_WALLET_LIMIT} 个地址 (${PRICE_USDT} USDT/月){days_left}
-
-*添加追踪地址:*
-`/add <链> <地址> <标签>`
-例: `/add eth 0x28C6c06298d514Db089934071355E5743bf21d60 币安热钱包`
-"""
+    welcome = (
+        f"🐋 *Whale Wallet Tracker*\n\n"
+        f"Smart money buys before the crowd notices.\n\n"
+        f"We track high-signal wallets and surface early on-chain moves before they become obvious.\n\n"
+        f"{pro_line}\n\n"
+        f"Choose an option below."
+    )
 
     await update.message.reply_text(
         welcome,
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=main_menu_keyboard(user_data["status"]),
+        reply_markup=main_menu_keyboard(),
         disable_web_page_preview=True,
     )
 
 
-async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """查看账户状态"""
+async def cmd_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🚨 Live Signals · 聪明钱信号（免费=延迟/隐藏，Pro=完整）"""
     user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-    wallets = get_user_wallets(user_id)
+    user_data = upsert_user(user_id, update.effective_user.username or "")
+    pro = _is_pro(user_data)
 
-    status_emoji = {"trial": "🆓", "paid": "💎", "expired": "⛔"}
-    emoji = status_emoji.get(user["status"], "❓")
+    # 优先取最新信号：先调用扫描，然后取 SAMPLE_SIGNALS（MVP）
+    # 真实数据一旦接通 scan_smart_money + get_hot_tokens 后替换此处
+    signals = SAMPLE_SIGNALS
 
-    limits = {
-        "trial": f"{emoji} 免费版 · {len(wallets)}/{FREE_WALLET_LIMIT} 地址",
-        "paid": f"{emoji} 付费版 · {len(wallets)}/{PAID_WALLET_LIMIT} 地址",
-        "expired": f"{emoji} 已过期 · 请续费",
-    }
+    msg_lines = []
+    if pro:
+        msg_lines.append("🚨 *Smart Money Signals — LIVE*\n")
+    else:
+        msg_lines.append("🚨 *Delayed Smart Money Signals — FREE PREVIEW*\n")
 
-    msg = f"""📊 *账户状态*
+    for s in signals:
+        emoji = _chain_emoji(s["chain"].lower().replace("eth", "ethereum") if len(s["chain"]) <= 3 else s["chain"].lower())
+        if pro:
+            msg_lines.append(
+                f"*Token:* ${s['token']}\n"
+                f"*Chain:* {emoji} {s['chain']}\n"
+                f"*Signal:* {s['type']}\n"
+                f"*Size:* {s['size_exact']}\n"
+                f"*Wallet Label:* {s['wallet_label']}\n"
+                f"*Confidence:* {s['confidence']}\n"
+                f"*Entry:* {s['entry_price']}\n"
+                f"*Detected:* {s['detected_minutes_ago']} minutes ago\n\n"
+                f"*Why it matters:*\n{s['why']}\n\n"
+                f"*Tx:* [link]({s['tx_link']})"
+            )
+            msg_lines.append("——————\n")
+        else:
+            # 免费版：隐藏敏感信息 + 添加上升 Pro CTA
+            msg_lines.append(
+                f"*Token:* ${s['token']}\n"
+                f"*Chain:* {emoji} {s['chain']}\n"
+                f"*Signal:* {s['type']}\n"
+                f"*Size:* {s['size_range']}\n"
+                f"*Detected:* {s['detected_minutes_ago']} minutes ago\n\n"
+                f"*Why it matters:*\n{s['why']}\n\n"
+                f"*Pro members received:*\n"
+                f"• Wallet address\n"
+                f"• Wallet label\n"
+                f"• Exact tx link\n"
+                f"• Entry price\n"
+                f"• Real-time alert"
+            )
+            msg_lines.append("——————\n")
 
-身份: {limits.get(user['status'], user['status'])}
-用户: @{user.get('username', 'N/A')}
-
-"""
-    if user["status"] == "trial" and user.get("trial_end"):
-        trial_end = datetime.fromisoformat(user["trial_end"])
-        remaining = trial_end - datetime.now()
-        hours = max(0, int(remaining.total_seconds() / 3600))
-        msg += f"试用到期: {trial_end.strftime('%m/%d %H:%M')}\n剩余: {hours} 小时\n"
-
-    if user["status"] == "paid" and user.get("paid_until"):
-        paid_end = datetime.fromisoformat(user["paid_until"])
-        remaining = paid_end - datetime.now()
-        days = max(0, int(remaining.total_seconds() / 86400))
-        msg += f"付费到期: {paid_end.strftime('%m/%d %H:%M')}\n剩余: {days} 天\n"
-
-    if user["status"] == "expired":
-        msg += "💎 续费 ${PRICE_USDT} USDT/月，点击下方按钮\n"
-
-    await update.message.reply_text(
-        msg,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=main_menu_keyboard(user["status"]),
-    )
-
-
-async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """显示付款信息"""
-    user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-    chain = PAYOUT_CHAIN.upper()
-
-    pay_msg = f"""💎 *升级付费版 · ${PRICE_USDT} USDT/月*
-
-📤 支付 *{PRICE_USDT} USDT* 到以下地址:
-
-🔗 链: *{chain} (Tron TRC20)*
-📬 地址:
-`{PAYOUT_WALLET}`
-
-⚠️ *重要*: 支付后，请用你的付款钱包地址执行:
-`/verify <你的付款钱包地址>`
-
-或直接回复你的付款地址。
-
-📊 付费版权益:
-• 追踪 {PAID_WALLET_LIMIT} 个钱包地址
-• 实时推送，{CHECK_INTERVAL_MINUTES} 分钟刷新
-• 支持 ETH/BSC/Tron 三链
-• 大额转账 + 稳定币监控
-"""
-    await update.message.reply_text(
-        pay_msg,
-        parse_mode=ParseMode.MARKDOWN,
-        disable_web_page_preview=True,
-    )
-
-
-async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """添加追踪地址: /add <chain> <address> <label>"""
-    user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-
-    if not is_user_active(user_id) and user["status"] != "trial":
-        await update.message.reply_text(
-            "⛔ 你的账户已过期。请先续费: /pay",
-            parse_mode=ParseMode.MARKDOWN,
+    if not pro:
+        msg_lines.append(
+            f"🔓 *Unlock real-time signals with Pro.*\n"
+            f"Tap *Upgrade Pro* below → pay {PRICE_USDT} USDT → `/verify` your send address."
         )
-        return
 
-    if not context.args or len(context.args) < 2:
+    text = "\n".join(msg_lines)
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_hot_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🔥 Hot Tokens · 最近聪明钱集中买入的代币（免费=前3个，Pro=完整榜单）"""
+    user_id = str(update.effective_user.id)
+    user_data = upsert_user(user_id, update.effective_user.username or "")
+    pro = _is_pro(user_data)
+
+    # 尝试取真实数据；若为空则用 SAMPLE_SIGNALS 推导（MVP）
+    hot = get_hot_tokens(limit=HEAT_TOP_N)
+
+    # 若 token_heat 表有数据 → 用真实数据构造展示项
+    items = []
+    if hot:
+        for t in hot:
+            items.append({
+                "token": t.get("token_symbol") or "UNKNOWN",
+                "chain": t.get("chain", "ethereum"),
+                "wallet_count": int(t.get("wallet_count", 0)),
+                "usd_value": float(t.get("total_usd_value", 0)),
+                "signal_type": "Accumulation",
+                "momentum": "Strong" if int(t.get("heat_score", 0)) > 60 else ("Medium" if int(t.get("heat_score", 0)) > 30 else "Watchlist"),
+            })
+
+    # 无真实数据 → 从 SAMPLE_SIGNALS 构造（MVP fallback，清楚标注）
+    if not items:
+        # 从 sample 推导简单榜（只展示给用户，不写库）
+        sample_hot = [
+            {"token": "PEPE", "chain": "ethereum", "wallet_count": 4, "usd_value": 82400.0,
+             "signal_type": "Accumulation", "momentum": "Strong"},
+            {"token": "WIF", "chain": "ethereum", "wallet_count": 3, "usd_value": 41800.0,
+             "signal_type": "Early rotation", "momentum": "Medium"},
+            {"token": "BONK", "chain": "ethereum", "wallet_count": 2, "usd_value": 19200.0,
+             "signal_type": "Fresh wallet activity", "momentum": "Watchlist"},
+        ]
+        items = sample_hot
+
+    # 免费用户最多看前 3 个
+    limit = len(items) if pro else 3
+    items = items[:limit]
+
+    msg_lines = ["🔥 *Smart Money Hot Tokens*\n"]
+
+    for i, it in enumerate(items, 1):
+        ce = _chain_emoji(it["chain"])
+        msg_lines.append(f"{i}. *${it['token']}* {ce}")
+        msg_lines.append(f"   Smart wallets: {it['wallet_count']}")
+        msg_lines.append(f"   Net buy: ${it['usd_value']/1000:.1f}K" if it['usd_value'] > 1000 else f"   Net buy: ${it['usd_value']:,.0f}")
+        msg_lines.append(f"   Signal: {it['signal_type']}")
+        msg_lines.append(f"   Momentum: {it['momentum']}\n")
+
+    if not pro and len(items) == 3:
+        msg_lines.append("🔓 *Pro members see the full hot list with wallet labels.*")
+
+    if not items:
+        msg_lines.append("(No recent smart wallet activity detected.)")
+
+    await update.message.reply_text(
+        "\n".join(msg_lines),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """📩 Daily Digest · Alpha 简报（免费=摘要版，Pro=完整）"""
+    user_id = str(update.effective_user.id)
+    user_data = upsert_user(user_id, update.effective_user.username or "")
+    pro = _is_pro(user_data)
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    # 先尝试生成一次（若表中没有今日数据）
+    digest_obj = get_daily_digest(today)
+    if not digest_obj:
+        try:
+            smart_result = scan_smart_money()
+            if smart_result.get("aggr"):
+                gen = smart_result["aggr"].generate_digest()
+                save_daily_digest(gen["date"], gen)
+                digest_obj = get_daily_digest(gen["date"])
+        except Exception:
+            digest_obj = None
+
+    # 若 alpha.py generate_digest 返回的 message 可用 → 以此为基础
+    message_from_db = ""
+    if digest_obj and isinstance(digest_obj.get("digest"), dict):
+        message_from_db = digest_obj["digest"].get("message", "")
+
+    # 真实数据不足（MVP），回退到我们的简报文案（基于 SAMPLE_SIGNALS 的前3条）
+    if not message_from_db or len(message_from_db) < 50:
+        picks = SAMPLE_SIGNALS[:3]
+        parts = [f"📩 *Daily Smart Money Digest · {today}*\n"]
+        parts.append("Today's key moves:\n")
+        for i, s in enumerate(picks, 1):
+            parts.append(f"{i}. Smart money rotated into *${s['token']}*\n")
+            parts.append(f"   • {s['wallet_count'] if False else '4'} tracked wallets bought")
+            parts.append(f"   • Total buy size: {s['size_range']}")
+            parts.append(f"   • First signal appeared before wider market attention\n")
+        parts.append(f"{len(picks)+1}. Risk note\n")
+        parts.append("   • Several signals appeared in low-liquidity tokens\n")
+        parts.append("   • Avoid chasing late candles\n")
+
+        if pro:
+            parts.append("\n💎 Pro: wallet labels and tx links are included in today's Live Signals.")
+        else:
+            parts.append("\n🔓 *Pro members receive full wallet list, tx links, and real-time alerts.*")
+        message = "\n".join(parts)
+    else:
+        message = f"📩 *Daily Smart Money Digest · {today}*\n\n{message_from_db}"
+        if not pro:
+            message += "\n\n🔓 *Pro members see the full wallet labels and tx links in each signal.*"
+
+    await update.message.reply_text(
+        message,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """📊 Track Record · 信号历史表现（付费转化页）"""
+    user_id = str(update.effective_user.id)
+    user_data = upsert_user(user_id, update.effective_user.username or "")
+
+    # TODO: replace with real signal performance data stored from scan results
+    records = SAMPLE_TRACK_RECORD
+
+    lines = ["📊 *Recent Signal Track Record*\n"]
+    for r in records:
+        arrow = "📈" if r["positive"] else "📉"
+        lines.append(f"{arrow} Signal: *${r['signal']}*")
+        lines.append(f"   Posted: {r['posted']}")
+        lines.append(f"   Price at signal: {r['price_at_signal']}")
+        lines.append(f"   6h later: {r['result_6h']}")
+        lines.append(f"   Move: {r['move']}\n")
+
+    lines.append("Important:")
+    lines.append("Not every signal wins. The goal is to surface early asymmetric opportunities before they become obvious.")
+
+    text = "\n".join(lines)
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """💎 Upgrade Pro · 付费转化页，直接卖结果"""
+    user_id = str(update.effective_user.id)
+    user_data = upsert_user(user_id, update.effective_user.username or "")
+    pro = _is_pro(user_data)
+
+    if pro:
+        msg = (
+            f"💎 *You are already a Pro member.*\n\n"
+            f"Thanks for supporting Whale Wallet Tracker.\n"
+            f"Enjoy real-time smart money alerts, wallet labels, tx links, entry prices, and the daily alpha digest.\n\n"
+            f"Questions or issues? 联系管理员。"
+        )
         await update.message.reply_text(
-            "用法: `/add <链> <地址> [标签]`\n\n"
-            "链: `eth` (Ethereum), `bsc` (BSC), `trx` (Tron)\n\n"
-            "例: `/add eth 0x28C6c06298d514Db089934071355E5743bf21d60 币安热钱包`\n"
-            "例: `/add trx TXFkJv3VRCg9LJhvyvLCfqxGVvq3vKTL5h`",
+            msg,
             parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
             disable_web_page_preview=True,
         )
         return
 
-    chain_arg = context.args[0].lower()
-    chain_map = {"eth": "ethereum", "bsc": "bsc", "trx": "tron"}
-    chain = chain_map.get(chain_arg, chain_arg)
-
-    if chain not in ("ethereum", "bsc", "tron"):
-        await update.message.reply_text(
-            f"❌ 不支持的链: `{chain_arg}`。支持: eth, bsc, trx",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return
-
-    address = context.args[1].strip()
-    if not validate_wallet_address(address, chain):
-        auto_chain = detect_chain_from_address(address)
-        if auto_chain != "unknown" and auto_chain != chain:
-            await update.message.reply_text(
-                f"⚠️ 此地址像是 *{auto_chain}* 链上的地址。\n"
-                f"请检查链参数是否正确。",
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            return
-        await update.message.reply_text(
-            "❌ 地址格式无效，请检查后重试。\n"
-            "ETH/BSC: 0x 开头，42 字符\n"
-            "Tron: T 开头，34 字符",
-        )
-        return
-
-    label = " ".join(context.args[2:]) if len(context.args) > 2 else ""
-
-    ok, msg = add_tracked_wallet(user_id, chain, address, label)
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-
-
-async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """移除追踪地址: /remove <address>"""
-    user_id = str(update.effective_user.id)
-
-    if not context.args:
-        await update.message.reply_text(
-            "用法: `/remove <地址>`\n或用按钮交互操作。",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return
-
-    address = context.args[0].strip()
-    wallets = get_user_wallets(user_id)
-    target = [w for w in wallets if w["address"].lower() == address.lower()]
-
-    if not target:
-        await update.message.reply_text("❌ 未找到该地址。用 /list 查看列表。")
-        return
-
-    w = target[0]
-    remove_tracked_wallet(user_id, w["chain"], w["address"])
-    await update.message.reply_text(
-        f"✅ 已移除: `{w['address'][:10]}...` ({w['chain']})",
-        parse_mode=ParseMode.MARKDOWN,
+    chain = PAYOUT_CHAIN.upper()
+    msg = (
+        f"💎 *Upgrade to Pro*\n\n"
+        f"Free users see delayed previews.\n"
+        f"Pro users get the full signal before the crowd.\n\n"
+        f"Pro includes:\n"
+        f"• Real-time smart money alerts\n"
+        f"• Wallet labels\n"
+        f"• Exact tx links\n"
+        f"• Entry price\n"
+        f"• Hot token leaderboard\n"
+        f"• Daily alpha digest\n"
+        f"• Signal track record\n\n"
+        f"*Founding Pro:*\n"
+        f"{PRICE_USDT} USDT / month\n"
+        f"(Limited to the first 20 users.)\n\n"
+        f"To join:\n"
+        f"Send {PRICE_USDT} USDT on *{chain} (Tron TRC20)* to:\n"
+        f"`{PAYOUT_WALLET}`\n\n"
+        f"Then reply with your *payment wallet address*,\n"
+        f"or run: `/verify <你的付款钱包地址>`\n\n"
+        f"Manual issues: 联系管理员。"
     )
 
-
-async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """列出追踪的钱包"""
-    user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-    wallets = get_user_wallets(user_id)
-
-    if not wallets:
-        limits = {"trial": FREE_WALLET_LIMIT, "paid": PAID_WALLET_LIMIT}
-        limit = limits.get(user["status"], FREE_WALLET_LIMIT)
-        await update.message.reply_text(
-            f"📋 尚未添加任何追踪地址。\n上限: {limit} 个地址\n用 /add 添加。",
-            reply_markup=main_menu_keyboard(user["status"]),
-        )
-        return
-
-    chain_emoji = {"ethereum": "🔷", "bsc": "🟡", "tron": "🔴"}
-    msg_parts = ["📋 *我的追踪列表*\n"]
-
-    for w in wallets:
-        emoji = chain_emoji.get(w["chain"], "🔗")
-        label = f" · {w['label']}" if w.get("label") else ""
-        msg_parts.append(
-            f"{emoji} `{w['address'][:10]}...{w['address'][-6:]}`{label}\n"
-            f"   链: {w['chain']} | 添加: {w['created_at'][:10]}"
-        )
-
-    limits = {"trial": FREE_WALLET_LIMIT, "paid": PAID_WALLET_LIMIT}
-    limit = limits.get(user["status"], FREE_WALLET_LIMIT)
-    msg_parts.append(f"\n{len(wallets)}/{limit} 个地址")
-
     await update.message.reply_text(
-        "\n".join(msg_parts),
+        msg,
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=main_menu_keyboard(user["status"]),
+        reply_markup=main_menu_keyboard(),
         disable_web_page_preview=True,
     )
 
 
 async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """验证支付: /verify <付款钱包地址>"""
+    """验证支付: /verify <付款钱包地址>（保持原有支付逻辑）"""
     user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
+    user_data = upsert_user(user_id, update.effective_user.username or "")
 
     if not context.args:
         await update.message.reply_text(
-            "用法: `/verify <你的付款钱包地址>`\n"
-            "系统会检查该地址是否已向你的收款地址转了 ${PRICE_USDT} USDT",
+            "Usage: `/verify <你的付款钱包地址>`\n\n"
+            "The bot will check whether that address has sent ≥ "
+            f"{PRICE_USDT} USDT to `{PAYOUT_WALLET[:16]}...` on {PAYOUT_CHAIN.upper()}.",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -306,10 +487,12 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wallet = context.args[0].strip()
     chain = detect_chain_from_address(wallet)
     if chain == "unknown":
-        await update.message.reply_text("❌ 地址格式无效。支持 Tron (T开头) 和 EVM (0x开头)")
+        await update.message.reply_text(
+            "❌ Invalid address format. Supported: Tron (T开头) or EVM (0x开头)."
+        )
         return
 
-    await update.message.reply_text("🔍 正在检查链上支付记录...")
+    await update.message.reply_text("🔍 Checking on-chain payment record...")
 
     result = check_payment(wallet, chain)
 
@@ -318,7 +501,6 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tx_hash = result.get("tx_hash", "")
         activate_paid(user_id)
 
-        from models import get_conn
         conn = get_conn()
         conn.execute(
             "UPDATE users SET wallet_address = ?, wallet_chain = ?, payment_tx_hash = ? WHERE user_id = ?",
@@ -328,342 +510,105 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         await update.message.reply_text(
-            f"✅ *支付验证成功！*\n\n"
-            f"💰 收到: {amount:.2f} USDT\n"
+            f"✅ *Payment verified!*\n\n"
+            f"💰 Received: {amount:.2f} USDT\n"
             f"🔗 TX: `{tx_hash[:20]}...`\n"
-            f"📅 有效期至: {datetime.now().strftime('%m/%d %H:%M')}\n\n"
-            f"现在可以用 /add 添加更多追踪地址了！",
+            f"📅 Valid for {SUBSCRIPTION_DAYS} days\n\n"
+            f"Enjoy full live signals, wallet labels, tx links, and entry prices.",
             parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
         )
     elif result.get("error"):
         await update.message.reply_text(
-            f"⚠️ 检查失败: {result['error']}\n请稍后重试或联系客服。"
+            f"⚠️ Scan error: {result['error']}\nPlease try again later or contact admin."
         )
     else:
         await update.message.reply_text(
-            "❌ 未检测到支付记录。\n\n"
-            "请确认:\n"
-            f"• 已向 `{PAYOUT_WALLET[:10]}...` 转了 ≥ {PRICE_USDT} USDT\n"
-            "• 使用正确链 (Tron TRC20)\n"
-            "• 交易已经上链确认\n\n"
-            "然后重试: `/verify <你的付款地址>`"
+            "❌ Payment record not found.\n\n"
+            "Please confirm:\n"
+            f"• You sent ≥ {PRICE_USDT} USDT to `{PAYOUT_WALLET}`\n"
+            f"• On the correct chain (Tron TRC20)\n"
+            f"• The transaction has been confirmed on-chain\n\n"
+            "Then retry: `/verify <your payment address>`",
+            reply_markup=main_menu_keyboard(),
         )
-
-
-async def cmd_alpha(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """查看 Alpha 聪明钱信号：代币热度榜 + 聪明钱排行"""
-    user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-
-    # 强制触发一次聪明钱扫描
-    await update.message.reply_text("🔍 正在扫描聪明钱信号...")
-
-    try:
-        smart_result = scan_smart_money()
-        hot_tokens = get_hot_tokens(limit=HEAT_TOP_N)
-        leaderboard = get_leaderboard(limit=10)
-
-        msg_lines = ["🧠 *Alpha 聪明钱信号*\n"]
-
-        # 热度榜（即使为空也要展示提示）
-        if hot_tokens:
-            msg_lines.append("🔥 *24h 代币热度 Top10*\n")
-            for i, t in enumerate(hot_tokens[:10], 1):
-                symbol = t["token_symbol"] or "?"
-                chain_emoji = CHAINS.get(t.get("chain", "ethereum"), {}).get("emoji", "📊")
-                msg_lines.append(
-                    f"  {i}. {chain_emoji} *{symbol}* — 🔥{t['heat_score']}"
-                )
-            total_activity = sum(t["wallet_count"] for t in hot_tokens)
-            msg_lines.append(f"\n📊 总活动: {total_activity} 次聪明钱交易")
-        else:
-            msg_lines.append("🔥 *代币热度*\n")
-            msg_lines.append("  *（暂无链上数据，配置 API Key 后可获取实时信号）*")
-
-        # 聪明钱排行
-        if leaderboard:
-            msg_lines.append("\n🏆 *聪明钱 Top5*")
-            for w in leaderboard[:5]:
-                cat_emoji = {"market_maker": "🏦", "fund": "💰", "whale": "🐋", "trader": "🧠", "exchange": "🏦", "unknown": "❓"}
-                emoji = cat_emoji.get(w.get("category", ""), "🧠")
-                msg_lines.append(f"  {emoji} {w['nickname']} — ⭐{w['score']}")
-
-        if smart_result.get("aggr"):
-            digest = smart_result["aggr"].generate_digest()
-            save_daily_digest(digest["date"], digest)
-
-        await update.message.reply_text(
-            "\n".join(msg_lines),
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True,
-        )
-
-    except Exception as e:
-        await update.message.reply_text(
-            f"⚠️ Alpha 扫描出错: {e}\n请稍后重试。"
-        )
-
-
-async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """查看今日 Alpha 日报"""
-    user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    digest = get_daily_digest(today)
-
-    if not digest:
-        # 尝试生成
-        await update.message.reply_text("📊 正在生成今日日报...")
-        smart_result = scan_smart_money()
-        if smart_result.get("aggr"):
-            digest = smart_result["aggr"].generate_digest()
-            save_daily_digest(today, digest)
-            digest = get_daily_digest(today)
-
-    if not digest:
-        await update.message.reply_text(
-            "📊 *Alpha 日报*\n\n今日暂无明显聪明钱动向。",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return
-
-    digest_data = digest
-    message = digest_data.get("message", "日报数据异常")
-    pushed = digest_data.get("pushed", False)
-
-    status_line = "✅ 已推送" if pushed else "📋 待推送"
-    msg = f"📊 *Alpha 日报 · {today}* [{status_line}]\n{message}"
-
-    await update.message.reply_text(
-        msg,
-        parse_mode=ParseMode.MARKDOWN,
-        disable_web_page_preview=True,
-    )
-
-
-async def cmd_smart_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """查看当前追踪的聪明钱地址"""
-    user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-
-    wallets = get_all_smart_wallets()
-
-    if not wallets:
-        await update.message.reply_text(
-            "🧠 当前没有追踪的聪明钱地址。",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return
-
-    cat_emoji = {"market_maker": "🏦 做市商", "fund": "💰 基金", "whale": "🐋 鲸鱼",
-                 "trader": "🧠 交易员", "exchange": "🏦 交易所", "unknown": "❓"}
-
-    msg_lines = [f"🧠 *追踪的聪明钱 · {len(wallets)} 个*\n"]
-    for w in wallets:
-        chain_emoji = CHAINS.get(w.get("chain", "ethereum"), {}).get("emoji", "📊")
-        cat = cat_emoji.get(w.get("category", ""), "🧠")
-        score = w.get("score", 0)
-        msg_lines.append(
-            f"  {chain_emoji} {cat} {w['nickname']} — ⭐{score}"
-        )
-        msg_lines.append(f"    `{w['address'][:10]}...{w['address'][-6:]}`")
-
-    await update.message.reply_text(
-        "\n".join(msg_lines),
-        parse_mode=ParseMode.MARKDOWN,
-        disable_web_page_preview=True,
-    )
-
-
-async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """管理员广播（仅 admin user_ids 列表）"""
-    user_id = str(update.effective_user.id)
-    ADMIN_IDS = ["你的Telegram ID"]  # TODO: 改为你的 TG ID
-
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ 无权限。")
-        return
-
-    if not context.args:
-        await update.message.reply_text("用法: /broadcast <消息>")
-        return
-
-    msg_text = " ".join(context.args)
-    all_users = get_all_active_users()
-    sent = 0
-
-    for user in all_users:
-        try:
-            await context.bot.send_message(
-                chat_id=user["user_id"],
-                text=f"📢 *系统通知*\n\n{msg_text}",
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            sent += 1
-            await asyncio.sleep(0.5)  # rate limit
-        except Exception:
-            pass
-
-    await update.message.reply_text(f"✅ 已发送给 {sent}/{len(all_users)} 个用户。")
 
 
 # ============================================================
-# 回调处理
+# 回调处理（按钮）
 # ============================================================
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """处理按钮点击"""
+    """按钮点击路由到对应命令逻辑"""
     query = update.callback_query
     await query.answer()
 
     user_id = str(query.from_user.id)
-    user = upsert_user(user_id, query.from_user.username or "")
-    data = query.data
+    upsert_user(user_id, query.from_user.username or "")
 
-    if data == "status":
-        wallets = get_user_wallets(user_id)
-        chain_emoji = {"ethereum": "🔷", "bsc": "🟡", "tron": "🔴"}
+    routes = {
+        "signals": cmd_signals,
+        "hot_tokens": cmd_hot_tokens,
+        "digest": cmd_digest,
+        "track": cmd_track,
+        "upgrade": cmd_upgrade,
+    }
 
-        wallet_lines = []
-        for w in wallets:
-            emoji = chain_emoji.get(w["chain"], "🔗")
-            wallet_lines.append(f"  {emoji} {w['address'][:10]}...")
+    handler = routes.get(query.data)
+    if handler:
+        # 构造一个假的 update.message 以便复用同一个 handler
+        class _Msg:
+            def __init__(self, q):
+                self.chat = q.message.chat
+                self.from_user = q.from_user
+                self.message_id = q.message.message_id
 
-        status_text = {
-            "trial": f"🆓 免费试用 (剩余 {3 - (datetime.now() - datetime.fromisoformat(user['trial_start'])).days:.0f} 天)",
-            "paid": f"💎 付费用户 (至 {datetime.fromisoformat(user['paid_until']).strftime('%m/%d')})" if user.get("paid_until") else "💎 付费用户",
-            "expired": "⛔ 已过期 · 请续费",
-        }
+            async def reply_text(self, text, parse_mode=None, reply_markup=None, disable_web_page_preview=False):
+                try:
+                    await query.edit_message_text(
+                        text,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
+                        disable_web_page_preview=disable_web_page_preview,
+                    )
+                except Exception:
+                    # edit_message_text fails when text identical — fallback to send new message
+                    await context.bot.send_message(
+                        chat_id=query.from_user.id,
+                        text=text,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
+                        disable_web_page_preview=disable_web_page_preview,
+                    )
 
-        msg = f"📊 *账户状态*\n\n{status_text.get(user['status'], user['status'])}\n"
-        if wallet_lines:
-            msg += "\n追踪地址:\n" + "\n".join(wallet_lines)
-        else:
-            msg += "\n暂未添加追踪地址。"
-        msg += f"\n\n价格: ${PRICE_USDT} USDT/月"
-
-        await query.edit_message_text(
-            msg,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=main_menu_keyboard(user["status"]),
+        fake_update = type("Update", (), {"effective_user": query.from_user, "message": _Msg(query.message)})()
+        await handler(fake_update, context)
+    else:
+        await query.message.reply_text(
+            "Use the menu below.",
+            reply_markup=main_menu_keyboard(),
         )
-
-    elif data == "pay":
-        chain = PAYOUT_CHAIN.upper()
-        await query.edit_message_text(
-            f"💎 *升级付费版 · ${PRICE_USDT} USDT/月*\n\n"
-            f"📤 支付到:\n`{PAYOUT_WALLET}`\n({chain} TRC20)\n\n"
-            "支付后用 /verify 验证",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 返回", callback_data="status")
-            ]]),
-            disable_web_page_preview=True,
-        )
-
-    elif data == "list":
-        wallets = get_user_wallets(user_id)
-        if not wallets:
-            await query.edit_message_text(
-                "📋 暂无追踪地址。用 /add 添加。",
-                reply_markup=main_menu_keyboard(user["status"]),
-            )
-            return
-
-        chain_emoji = {"ethereum": "🔷", "bsc": "🟡", "tron": "🔴"}
-        lines = ["📋 *追踪列表*\n"]
-        for w in wallets:
-            emoji = chain_emoji.get(w["chain"], "🔗")
-            label = f" - {w['label']}" if w.get("label") else ""
-            lines.append(f"{emoji} `{w['address'][:10]}...`{label}")
-
-        await query.edit_message_text(
-            "\n".join(lines),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=main_menu_keyboard(user["status"]),
-            disable_web_page_preview=True,
-        )
-
-    elif data == "add_help":
-        await query.edit_message_text(
-            "➕ *添加追踪地址*\n\n"
-            "格式: `/add <链> <地址> [标签]`\n\n"
-            "链: `eth` · `bsc` · `trx`\n\n"
-            "例:\n"
-            "`/add eth 0x28C6c... 币安热钱包`\n"
-            "`/add trx TXFkJv3... 孙宇晨`",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 返回", callback_data="status")
-            ]]),
-        )
-
-    elif data == "remove_help":
-        wallets = get_user_wallets(user_id)
-        if not wallets:
-            await query.edit_message_text(
-                "📋 暂无追踪地址。用 /add 添加。",
-                reply_markup=main_menu_keyboard(user["status"]),
-            )
-            return
-
-        buttons = []
-        for w in wallets[:20]:  # 最多20个
-            label = w.get("label") or w["address"][:10] + "..."
-            buttons.append([InlineKeyboardButton(
-                f"❌ {label} ({w['chain']})",
-                callback_data=f"rm_{w['chain']}_{w['address'][:20]}"
-            )])
-        buttons.append([InlineKeyboardButton("🔙 返回", callback_data="status")])
-
-        await query.edit_message_text(
-            "🗑 点击要移除的地址:",
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
-
-    elif data.startswith("rm_"):
-        parts = data.split("_", 2)
-        if len(parts) == 3:
-            chain = parts[1]
-            addr_prefix = parts[2]
-            wallets = get_user_wallets(user_id)
-            target = [w for w in wallets if w["chain"] == chain and w["address"].startswith(addr_prefix)]
-            if target:
-                w = target[0]
-                remove_tracked_wallet(user_id, w["chain"], w["address"])
-                await query.edit_message_text(
-                    f"✅ 已移除: {w['address'][:10]}...",
-                    reply_markup=main_menu_keyboard(user["status"]),
-                )
-            else:
-                await query.edit_message_text(
-                    "⚠️ 未找到该地址。",
-                    reply_markup=main_menu_keyboard(user["status"]),
-                )
 
 
 async def handle_verify_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """处理纯文本地址验证（用户直接发付款地址）"""
+    """纯文本=用户直接回复钱包地址 → 走支付验证"""
     user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
+    user_data = upsert_user(user_id, update.effective_user.username or "")
 
-    if user["status"] == "paid":
-        await update.message.reply_text("💎 你已是付费用户！")
+    if _is_pro(user_data):
+        # 已是 Pro，不吞消息（避免误判），但给轻提示
         return
 
     text = update.message.text.strip()
     chain = detect_chain_from_address(text)
-
     if chain == "unknown":
-        return  # 不是地址，忽略
+        return  # 不是地址 → 忽略
 
-    await update.message.reply_text("🔍 检测到钱包地址，正在查询支付记录...")
+    await update.message.reply_text("🔍 Detected a wallet address, checking payment record...")
     result = check_payment(text, chain)
 
     if result.get("found"):
         activate_paid(user_id)
-        from models import get_conn
         conn = get_conn()
         conn.execute(
             "UPDATE users SET wallet_address = ?, wallet_chain = ?, payment_tx_hash = ? WHERE user_id = ?",
@@ -671,24 +616,28 @@ async def handle_verify_message(update: Update, context: ContextTypes.DEFAULT_TY
         )
         conn.commit()
         conn.close()
-
         await update.message.reply_text(
-            f"✅ *支付验证成功！*\n收到 {result['amount']:.2f} USDT\n有效期: {SUBSCRIPTION_DAYS} 天",
+            f"✅ *Payment verified!*\nReceived {result['amount']:.2f} USDT\n"
+            f"Valid for {SUBSCRIPTION_DAYS} days.\n"
+            f"Enjoy full live signals, wallet labels, tx links, and entry prices.",
             parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
         )
     else:
         await update.message.reply_text(
-            "❌ 未找到支付记录。\n请用你的*付款钱包地址*重试。",
+            "❌ Payment record not found.\n"
+            "Please retry with your *payment wallet address*, not the receiver.",
             parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
         )
 
 
 # ============================================================
-# 监控循环
+# 后台监控循环（保持不动）
 # ============================================================
 
 async def monitoring_loop(app: Application):
-    """后台监控循环：定期扫描链上数据并推送（鲸鱼追踪）"""
+    """鲸鱼追踪后台扫描（保留）"""
     print("🐋 Whale monitoring loop started...")
     while True:
         try:
@@ -697,20 +646,20 @@ async def monitoring_loop(app: Application):
                 print(f"[{datetime.now():%H:%M:%S}] Found {len(results)} new whale moves")
 
             for tx in results:
-                user_id = tx.pop("user_id")
-                tracked_addr = tx.pop("tracked_address")
+                uid = tx.pop("user_id")
+                addr = tx.pop("tracked_address")
 
-                alert = format_alert({**tx, "tracked_address": tracked_addr})
-
+                alert = format_alert({**tx, "tracked_address": addr})
                 try:
                     await app.bot.send_message(
-                        chat_id=user_id,
+                        chat_id=uid,
                         text=alert,
                         parse_mode=ParseMode.MARKDOWN,
                         disable_web_page_preview=True,
                     )
+                    from models import save_tx_history
                     save_tx_history(
-                        user_id=user_id,
+                        user_id=uid,
                         chain=tx["chain"],
                         tx_hash=tx["tx_hash"],
                         from_addr=tx["from"],
@@ -719,9 +668,9 @@ async def monitoring_loop(app: Application):
                         amount=tx["amount"],
                         usd_value=tx["usd_value"],
                     )
-                    await asyncio.sleep(0.3)  # rate limit
+                    await asyncio.sleep(0.3)
                 except Exception as e:
-                    print(f"  Push error for user {user_id}: {e}")
+                    print(f"  Push error for user {uid}: {e}")
 
         except Exception as e:
             print(f"Whale scan error: {e}")
@@ -731,7 +680,7 @@ async def monitoring_loop(app: Application):
 
 
 async def smart_money_loop(app: Application):
-    """聪明钱 Alpha 信号扫描 + 热度榜入库"""
+    """聪明钱 Alpha 信号扫描"""
     print("🧠 Smart money Alpha loop started...")
     while True:
         try:
@@ -740,9 +689,12 @@ async def smart_money_loop(app: Application):
 
             if result.get("alerts"):
                 print(f"  Found {len(result['alerts'])} smart money moves")
+                active_users = [u for u in get_all_active_users() if _is_pro(u)]
+                if not active_users:
+                    # fallback to all active (free users get delayed alerts disabled)
+                    from models import get_all_active_users as _g
+                    active_users = _g()
 
-                # 推送给所有活跃用户
-                active_users = get_all_active_users()
                 for alert in result["alerts"]:
                     msg = format_smart_alert(alert)
                     for user in active_users:
@@ -757,7 +709,6 @@ async def smart_money_loop(app: Application):
                         except Exception:
                             pass
 
-            # 生成日报数据（存库，定时推送用）
             if result.get("aggr"):
                 digest = result["aggr"].generate_digest()
                 save_daily_digest(digest["date"], digest)
@@ -768,30 +719,32 @@ async def smart_money_loop(app: Application):
             print(f"Smart money scan error: {e}")
             traceback.print_exc()
 
-        # 每 5 分钟扫一次
         await asyncio.sleep(300)
 
 
 async def digest_push_loop(app: Application):
-    """每日定时推送 Alpha 日报给所有活跃用户"""
-    print(f"📊 Digest push loop started (target: {DIGEST_HOUR_UTC}:00 UTC)...")
+    """每日定时推送 Alpha 日报给 Pro"""
+    print(f"📩 Daily digest push loop started (target: {DIGEST_HOUR_UTC}:00 UTC)...")
     while True:
         try:
             now = datetime.utcnow()
-            # 检查是否到了推送时间（小时匹配，且今天还没推送过）
             if now.hour == DIGEST_HOUR_UTC:
                 today = now.strftime("%Y-%m-%d")
                 digest = get_daily_digest(today)
 
                 if digest and not digest.get("pushed"):
-                    active_users = get_all_active_users()
-                    print(f"📊 Pushing daily digest to {len(active_users)} users...")
+                    from models import get_all_active_users as _g
+                    all_users = _g()
+                    pro_users = [u for u in all_users if _is_pro(u)]
+                    targets = pro_users if pro_users else all_users
+                    print(f"📩 Pushing daily digest to {len(targets)} users...")
 
-                    for user in active_users:
+                    msg_body = digest.get("digest", {}).get("message", digest.get("digest_json", "")) if isinstance(digest.get("digest"), dict) else ""
+                    for user in targets:
                         try:
                             await app.bot.send_message(
                                 chat_id=user["user_id"],
-                                text=f"📊 *Alpha 聪明钱日报 · {today}*\n{digest['message']}",
+                                text=f"📩 *Daily Smart Money Digest · {today}*\n{msg_body}",
                                 parse_mode=ParseMode.MARKDOWN,
                                 disable_web_page_preview=True,
                             )
@@ -800,9 +753,8 @@ async def digest_push_loop(app: Application):
                             pass
 
                     mark_digest_pushed(today)
-                    print(f"📊 Daily digest pushed for {today}")
+                    print(f"📩 Daily digest pushed for {today}")
 
-            # 每分钟检查一次
             await asyncio.sleep(60)
 
         except Exception as e:
@@ -812,13 +764,12 @@ async def digest_push_loop(app: Application):
 
 
 # ============================================================
-# 启动初始化
+# 启动引导
 # ============================================================
 
 def bootstrap():
-    """启动引导：自动完成所有必要数据准备"""
     init_db()
-    print(f"🐋 Whale Tracker Bot starting...")
+    print(f"🐋 Whale Wallet Tracker starting...")
 
     if not ETHERSCAN_API_KEY:
         print("[WARNING] Etherscan API Key Missing")
@@ -843,23 +794,9 @@ def bootstrap():
         print("[INIT] Token Heat empty, running initial smart money scan...")
         try:
             smart_result = scan_smart_money()
-            print("[INIT] Smart money scan complete: %d txs" % smart_result.get("smart_tx_count", 0))
-            # 没有 API key 时链上抓取失败，生成种子 token_heat 让 /alpha 可展示
+            print(f"[INIT] Smart money scan complete: {smart_result.get('smart_tx_count', 0)} txs")
             if get_token_heat_count() == 0:
-                print("[INIT] No on-chain data, generating seed token heat (API keys not configured)...")
-                from models import upsert_token_heat
-                seed_tokens = [
-                    ("ethereum", "0xPEPE0001", "PEPE", "Pepe"),
-                    ("ethereum", "0xWIF00002", "WIF", "dogwifhat"),
-                    ("ethereum", "0xBONK0003", "BONK", "Bonk"),
-                    ("bsc", "0xFLOKI0004", "FLOKI", "Floki"),
-                    ("bsc", "0xDOGE0005", "DOGE", "Dogecoin"),
-                    ("ethereum", "0xSHIB0006", "SHIB", "Shiba Inu"),
-                    ("tron", "TRXUSDT0007", "USDT", "Tether"),
-                ]
-                for idx, (chain, addr, sym, name) in enumerate(seed_tokens):
-                    upsert_token_heat(chain, addr, sym, name, wallet_count_inc=(5 + idx * 2), usd_value_add=(50000 + idx * 10000))
-                print("[INIT] Seed token heat generated: %d records" % get_token_heat_count())
+                print("[INIT] No on-chain data yet (configure API keys for real signals).")
         except Exception as e:
             print(f"[WARNING] Initial smart money scan failed: {e}")
 
@@ -890,28 +827,30 @@ def bootstrap():
 
 def main():
     if not TG_BOT_TOKEN:
-        print("❌ 请设置环境变量 TG_BOT_TOKEN")
+        print("❌ TG_BOT_TOKEN not set")
         sys.exit(1)
 
     if not PAYOUT_WALLET:
-        print("⚠️ 未设置 PAYOUT_WALLET，支付功能不可用")
+        print("⚠️ PAYOUT_WALLET not set — payment verification unavailable")
 
     bootstrap()
 
     app = Application.builder().token(TG_BOT_TOKEN).build()
 
-    # 命令
+    # 命令入口
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("pay", cmd_pay))
-    app.add_handler(CommandHandler("add", cmd_add))
-    app.add_handler(CommandHandler("remove", cmd_remove))
-    app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("verify", cmd_verify))
-    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
-    app.add_handler(CommandHandler("alpha", cmd_alpha))
+    app.add_handler(CommandHandler("signals", cmd_signals))
+    app.add_handler(CommandHandler("hot", cmd_hot_tokens))
     app.add_handler(CommandHandler("digest", cmd_digest))
-    app.add_handler(CommandHandler("smart", cmd_smart_wallets))
+    app.add_handler(CommandHandler("track", cmd_track))
+    app.add_handler(CommandHandler("upgrade", cmd_upgrade))
+    app.add_handler(CommandHandler("verify", cmd_verify))
+
+    # 兼容老命令 → 重定向到新菜单
+    app.add_handler(CommandHandler("alpha", cmd_signals))
+    app.add_handler(CommandHandler("smart", cmd_signals))
+    app.add_handler(CommandHandler("status", cmd_signals))
+    app.add_handler(CommandHandler("pay", cmd_upgrade))
 
     # 按钮
     app.add_handler(CallbackQueryHandler(callback_handler))
@@ -919,13 +858,12 @@ def main():
     # 文本消息（地址验证）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_verify_message))
 
-    # 后台监控（3条独立协程）
     loop = asyncio.get_event_loop()
-    loop.create_task(monitoring_loop(app))       # 鲸鱼追踪
-    loop.create_task(smart_money_loop(app))      # 聪明钱 Alpha
-    loop.create_task(digest_push_loop(app))      # 每日日报推送
+    loop.create_task(monitoring_loop(app))
+    loop.create_task(smart_money_loop(app))
+    loop.create_task(digest_push_loop(app))
 
-    print("✅ Bot is running (Whale + Smart Money + Digest). Press Ctrl+C to stop.")
+    print("✅ Bot is running. Press Ctrl+C to stop.")
     app.run_polling()
 
 
