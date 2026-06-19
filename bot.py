@@ -104,6 +104,16 @@ SAMPLE_SIGNALS = [
     },
 ]
 
+# ============================================================
+# 📌 SAMPLE_TRACK_RECORD · 仅用于本地离线测试
+# ⚠️ 禁止在任何对外 UI 中直接展示给真实用户
+# TODO: replace with real signal performance data before public launch
+# 真实数据接入流程（预留）：
+#   1) 每次 Pro 信号推送给用户时，在某处记录 signal_token / signal_time / entry_price
+#   2) 6h / 24h 后回填当时价格与盈亏
+#   3) cmd_track 从该数据源读取并展示
+# ============================================================
+
 SAMPLE_TRACK_RECORD = [
     {
         "signal": "PEPE",
@@ -389,24 +399,29 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """📊 Track Record · 信号历史表现（付费转化页）"""
+    """📊 Track Record · 公开记录信号表现（付费转化页）
+    ⚠️ 禁止在未接入真实 signal performance 数据前展示任何 sample 代币战绩
+    """
     user_id = str(update.effective_user.id)
-    user_data = upsert_user(user_id, update.effective_user.username or "")
+    upsert_user(user_id, update.effective_user.username or "")
 
-    # TODO: replace with real signal performance data stored from scan results
-    records = SAMPLE_TRACK_RECORD
-
-    lines = ["📊 *Recent Signal Track Record*\n"]
-    for r in records:
-        arrow = "📈" if r["positive"] else "📉"
-        lines.append(f"{arrow} Signal: *${r['signal']}*")
-        lines.append(f"   Posted: {r['posted']}")
-        lines.append(f"   Price at signal: {r['price_at_signal']}")
-        lines.append(f"   6h later: {r['result_6h']}")
-        lines.append(f"   Move: {r['move']}\n")
-
-    lines.append("Important:")
-    lines.append("Not every signal wins. The goal is to surface early asymmetric opportunities before they become obvious.")
+    lines = [
+        "📊 *Track Record*\n",
+        "We start tracking live signal performance from launch.\n",
+        "Every Pro signal will be logged and reviewed publicly:",
+        "• Signal time",
+        "• Token",
+        "• Entry price",
+        "• 6h move",
+        "• 24h move",
+        "• Win or loss\n",
+        "*No fake screenshots.*",
+        "*No cherry-picking.*",
+        "Wins and losses will both be shown.\n",
+        "The goal is not to promise profits.",
+        "The goal is to surface early asymmetric opportunities before they become obvious.\n",
+        "_Live record will appear after the first real signals are posted._",
+    ]
 
     text = "\n".join(lines)
     await update.message.reply_text(
