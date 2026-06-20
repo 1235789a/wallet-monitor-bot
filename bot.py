@@ -5,6 +5,7 @@ Reddit: "How do you guys track whale wallet movements?" (👍198)
 """
 
 import asyncio
+import os
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -52,6 +53,9 @@ from monitor import (
 
 from alpha import AlphaAggregator
 
+# Founding Pro 限量名额（用于 /upgrade 文案 "first N users"）。仅 bot.py 读取，不改 config。
+FOUNDING_USER_LIMIT = int(os.environ.get("FOUNDING_USER_LIMIT", "20"))
+
 # ============================================================
 # 键盘 Markup
 # ============================================================
@@ -66,20 +70,178 @@ def tier_of(user: dict) -> str:
     return "free"
 
 
-def main_menu_keyboard(status: str):
-    """主菜单按钮 · 精简为 4 键"""
+def main_menu_keyboard(status: str = ""):
+    """主菜单 · Alpha Intelligence 5 键"""
     buttons = [
         [
-            InlineKeyboardButton("📋 我的追踪", callback_data="list"),
-            InlineKeyboardButton("➕ 添加地址", callback_data="add_help"),
+            InlineKeyboardButton("🚨 Live Signals", callback_data="signals"),
+            InlineKeyboardButton("🔥 Hot Tokens", callback_data="hot"),
         ],
-        [InlineKeyboardButton("🧠 Alpha 聪明钱信号", callback_data="alpha")],
+        [
+            InlineKeyboardButton("📩 Daily Digest", callback_data="digest"),
+            InlineKeyboardButton("📊 Track Record", callback_data="track"),
+        ],
+        [InlineKeyboardButton(f"💎 Upgrade Pro (${PRICE_USDT:.0f} USDT/mo)", callback_data="upgrade")],
     ]
-    if status == "paid":
-        buttons.append([InlineKeyboardButton("📊 账户状态", callback_data="status")])
-    else:
-        buttons.append([InlineKeyboardButton(f"💎 升级 Pro (${PRICE_USDT} USDT/月)", callback_data="pay")])
     return InlineKeyboardMarkup(buttons)
+
+
+# ============================================================
+# 渲染辅助（命令与按钮共用，免费/Pro 分层）
+# ============================================================
+
+def render_signals(tier: str) -> str:
+    """🚨 Live Signals：免费看 delayed preview（脱敏），Pro 看完整。"""
+    try:
+        result = scan_smart_money()
+        txs = result.get("txs", []) or []
+    except Exception as e:
+        return f"🚨 *Live Signals*\n\n⚠️ 信号扫描暂时出错: {e}\n请稍后重试。"
+
+    is_pro = tier in ("paid", "trial")
+
+    if not txs:
+        base = (
+            "🚨 *Live Signals*\n\n"
+            "当前暂无新的聪明钱信号。新信号出现时会第一时间推送。"
+        )
+        if not is_pro:
+            base += "\n\n🔒 _免费版仅显示延迟预览（脱敏）_\n💎 升级 Pro 解锁实时全量信号 → /upgrade"
+        return base
+
+    # 最多展示 5 条
+    lines = ["🚨 *Live Signals · 聪明钱实时动向*\n"]
+    shown = txs[:5] if is_pro else txs[:3]
+    for tx in shown:
+        lines.append(format_smart_alert(tx, tier=tier))
+        lines.append("—" * 6)
+
+    if not is_pro:
+        lines.append("\n🔒 _免费版为延迟预览：地址脱敏 / 无 tx 链接 / 无 entry price_")
+        lines.append("💎 升级 Pro 解锁实时全量信号 → /upgrade")
+    return "\n".join(lines)
+
+
+def render_hot(tier: str) -> str:
+    """🔥 Hot Tokens：免费最多看前 3，Pro 看完整 Top N。"""
+    try:
+        scan_smart_money()
+        hot_tokens = get_hot_tokens(limit=HEAT_TOP_N)
+        leaderboard = get_leaderboard(limit=10)
+    except Exception as e:
+        return f"🔥 *Hot Tokens*\n\n⚠️ 热度扫描暂时出错: {e}\n请稍后重试。"
+
+    is_pro = tier in ("paid", "trial")
+
+    if not hot_tokens:
+        base = "🔥 *Hot Tokens*\n\n暂无数据。聪明钱开始活跃后这里会出现热门代币榜。"
+        if not is_pro:
+            base += "\n\n💎 升级 Pro 解锁完整榜单 → /upgrade"
+        return base
+
+    top_n = HEAT_TOP_N if is_pro else 3
+    lines = ["🔥 *Hot Tokens · 24h 聪明钱热度榜*\n"]
+    for i, t in enumerate(hot_tokens[:top_n], 1):
+        symbol = t["token_symbol"] or "?"
+        ce = CHAINS.get(t.get("chain", "ethereum"), {}).get("emoji", "📊")
+        lines.append(f"  {i}. {ce} *{symbol}* — 🔥{t['heat_score']}")
+
+    if is_pro:
+        total_activity = sum(t["wallet_count"] for t in hot_tokens)
+        lines.append(f"\n📊 总活动: {total_activity} 次聪明钱交易")
+        if leaderboard:
+            lines.append("\n🏆 *聪明钱 Top5*")
+            cat_emoji = {"mm": "🏦", "vc": "💰", "trader": "🧠", "exchange": "🏦", "unknown": "❓"}
+            for w in leaderboard[:5]:
+                emoji = cat_emoji.get(w.get("category", ""), "🧠")
+                lines.append(f"  {emoji} {w['nickname']} — ⭐{w['score']}")
+    else:
+        lines.append(f"\n🔒 _免费版仅显示前 3 名 · 完整 Top{HEAT_TOP_N} + 聪明钱排行为 Pro 专享_")
+        lines.append("💎 升级 Pro 解锁 → /upgrade")
+    return "\n".join(lines)
+
+
+def render_digest(tier: str) -> str:
+    """📩 Daily Digest：免费看摘要，Pro 看完整。"""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    digest = get_daily_digest(today)
+
+    if not digest:
+        try:
+            result = scan_smart_money()
+            if result.get("aggr"):
+                d = result["aggr"].generate_digest()
+                save_daily_digest(today, d)
+                digest = get_daily_digest(today)
+        except Exception:
+            digest = None
+
+    is_pro = tier in ("paid", "trial")
+
+    if not digest:
+        base = "📩 *Daily Digest*\n\n今日暂无明显聪明钱动向。日报会在每日聪明钱活跃后生成。"
+        if not is_pro:
+            base += "\n\n💎 升级 Pro 查看完整 Alpha 日报 → /upgrade"
+        return base
+
+    message = digest.get("message", "")
+
+    if is_pro:
+        return f"📩 *Daily Alpha Digest · {today}*\n{message}"
+
+    # 免费：只给摘要首段 + 升级引导
+    preview = message.strip().split("\n\n")[0] if message else ""
+    return (
+        f"📩 *Daily Alpha Digest · {today}*\n\n"
+        f"{preview}\n\n"
+        "🔒 _免费版仅显示摘要_\n"
+        "💎 升级 Pro 查看完整日报（含代币、聪明钱、方向明细）→ /upgrade"
+    )
+
+
+def render_track() -> str:
+    """📊 Track Record：纯静态文案，零 mock 战绩。"""
+    return (
+        "📊 *Track Record*\n\n"
+        "We start tracking live signal performance from launch.\n\n"
+        "Every Pro signal will be logged and reviewed publicly:\n"
+        "• Signal time\n"
+        "• Token\n"
+        "• Entry price\n"
+        "• 6h move\n"
+        "• 24h move\n"
+        "• Win or loss\n\n"
+        "No fake screenshots.\n"
+        "No cherry-picking.\n"
+        "Wins and losses will both be shown.\n\n"
+        "The goal is not to promise profits.\n"
+        "The goal is to surface early asymmetric opportunities before they become obvious.\n\n"
+        "Live record will appear after the first real signals are posted."
+    )
+
+
+def render_upgrade() -> str:
+    """💎 Upgrade Pro：Founding Pro 收款信息。"""
+    chain = PAYOUT_CHAIN.upper()
+    return (
+        "💎 *Founding Pro*\n\n"
+        f"*{PRICE_USDT:.0f} USDT / month*\n"
+        f"Limited to the first {FOUNDING_USER_LIMIT} users.\n\n"
+        "Pro unlocks:\n"
+        "• Real-time smart money alerts\n"
+        "• Full wallet labels\n"
+        "• Tx links + entry prices\n"
+        "• Full hot tokens leaderboard\n"
+        "• Complete daily alpha digest\n\n"
+        "*How to pay:*\n"
+        f"🔗 Chain: *{chain} (TRC20)*\n"
+        "📬 Address:\n"
+        f"`{PAYOUT_WALLET}`\n\n"
+        f"After sending *{PRICE_USDT:.0f} USDT*, verify with:\n"
+        "`/verify <your_wallet_address>`\n\n"
+        "_(use the wallet address you paid from)_"
+    )
+
 
 
 
@@ -88,30 +250,20 @@ def main_menu_keyboard(status: str):
 # ============================================================
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """新用户注册 / 老用户欢迎"""
+    """Alpha Intelligence 首页 + 5 键菜单"""
     user = update.effective_user
     user_data = upsert_user(str(user.id), user.username or user.full_name)
 
-    days_left = ""
-    if user_data["status"] == "trial":
-        trial_end = datetime.fromisoformat(user_data["trial_end"])
-        hours = (trial_end - datetime.now()).total_seconds() / 3600
-        days_left = f"\n🆓 试用期剩余: {max(0, int(hours))} 小时"
-
-    welcome = f"""🐋 *Whale Tracker · 鲸鱼钱包追踪*
-
-欢迎 {user.full_name}！
-实时监控大额链上转账，第一时间掌握鲸鱼动向。
-
-🔷 支持: Ethereum · BSC · Tron
-💰 最低推送金额: ≥${MIN_USD_VALUE:,.0f}
-🆓 免费版: 追踪 {FREE_WALLET_LIMIT} 个地址
-💎 付费版: 追踪 {PAID_WALLET_LIMIT} 个地址 (${PRICE_USDT} USDT/月){days_left}
-
-*添加追踪地址:*
-`/add <链> <地址> <标签>`
-例: `/add eth 0x28C6c06298d514Db089934071355E5743bf21d60 币安热钱包`
-"""
+    welcome = (
+        "🐋 *Whale Wallet Tracker*\n\n"
+        "Smart money buys before the crowd notices.\n\n"
+        "We track high-signal wallets and surface early on-chain moves "
+        "before they become obvious.\n\n"
+        "Free users get delayed previews.\n"
+        "Pro users get real-time smart money alerts, wallet labels, tx links, "
+        "entry prices, and daily alpha digest.\n\n"
+        "Choose an option below."
+    )
 
     await update.message.reply_text(
         welcome,
@@ -119,6 +271,55 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard(user_data["status"]),
         disable_web_page_preview=True,
     )
+
+
+# ============================================================
+# Alpha Intelligence 命令（5 键菜单对应）
+# ============================================================
+
+async def cmd_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🚨 Live Signals"""
+    user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
+    await update.message.reply_text(
+        render_signals(tier_of(user)),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(user["status"]),
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_hot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🔥 Hot Tokens"""
+    user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
+    await update.message.reply_text(
+        render_hot(tier_of(user)),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(user["status"]),
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """📊 Track Record（纯静态，无 mock 战绩）"""
+    user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
+    await update.message.reply_text(
+        render_track(),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(user["status"]),
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """💎 Upgrade Pro · Founding Pro"""
+    user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
+    await update.message.reply_text(
+        render_upgrade(),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(user["status"]),
+        disable_web_page_preview=True,
+    )
+
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -165,35 +366,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """显示付款信息"""
-    user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-    chain = PAYOUT_CHAIN.upper()
+    """/pay → 重定向到 /upgrade（Founding Pro 收款页）"""
+    await cmd_upgrade(update, context)
 
-    pay_msg = f"""💎 *升级付费版 · ${PRICE_USDT} USDT/月*
-
-📤 支付 *{PRICE_USDT} USDT* 到以下地址:
-
-🔗 链: *{chain} (Tron TRC20)*
-📬 地址:
-`{PAYOUT_WALLET}`
-
-⚠️ *重要*: 支付后，请用你的付款钱包地址执行:
-`/verify <你的付款钱包地址>`
-
-或直接回复你的付款地址。
-
-📊 付费版权益:
-• 追踪 {PAID_WALLET_LIMIT} 个钱包地址
-• 实时推送，{CHECK_INTERVAL_MINUTES} 分钟刷新
-• 支持 ETH/BSC/Tron 三链
-• 大额转账 + 稳定币监控
-"""
-    await update.message.reply_text(
-        pay_msg,
-        parse_mode=ParseMode.MARKDOWN,
-        disable_web_page_preview=True,
-    )
 
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -379,100 +554,20 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_alpha(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """查看 Alpha 聪明钱信号：代币热度榜 + 聪明钱排行"""
-    user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-
-    # 强制触发一次聪明钱扫描
-    await update.message.reply_text("🔍 正在扫描聪明钱信号...")
-
-    try:
-        smart_result = scan_smart_money()
-        hot_tokens = get_hot_tokens(limit=HEAT_TOP_N)
-        leaderboard = get_leaderboard(limit=10)
-
-        if not hot_tokens:
-            await update.message.reply_text(
-                "📊 *Alpha 信号*\n\n暂无数据。稍后再试！",
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            return
-
-        msg_lines = ["🧠 *Alpha 聪明钱信号*\n"]
-
-        # 热度榜
-        msg_lines.append("🔥 *24h 代币热度 Top10*\n")
-        for i, t in enumerate(hot_tokens[:10], 1):
-            symbol = t["token_symbol"] or "?"
-            chain_emoji = CHAINS.get(t.get("chain", "ethereum"), {}).get("emoji", "📊")
-            msg_lines.append(
-                f"  {i}. {chain_emoji} *{symbol}* — 🔥{t['heat_score']}"
-            )
-
-        # 汇总
-        total_activity = sum(t["wallet_count"] for t in hot_tokens)
-        msg_lines.append(f"\n📊 总活动: {total_activity} 次聪明钱交易")
-
-        # 聪明钱排行
-        if leaderboard:
-            msg_lines.append("\n🏆 *聪明钱 Top5*")
-            for w in leaderboard[:5]:
-                cat_emoji = {"mm": "🏦", "vc": "💰", "trader": "🧠", "exchange": "🏦", "unknown": "❓"}
-                emoji = cat_emoji.get(w.get("category", ""), "🧠")
-                msg_lines.append(f"  {emoji} {w['nickname']} — ⭐{w['score']}")
-
-        if smart_result.get("aggr"):
-            digest = smart_result["aggr"].generate_digest()
-            save_daily_digest(digest["date"], digest)
-
-        await update.message.reply_text(
-            "\n".join(msg_lines),
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True,
-        )
-
-    except Exception as e:
-        await update.message.reply_text(
-            f"⚠️ Alpha 扫描出错: {e}\n请稍后重试。"
-        )
+    """/alpha → 重定向到 /hot（Hot Tokens 兼容入口）"""
+    await cmd_hot(update, context)
 
 
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """查看今日 Alpha 日报"""
-    user_id = str(update.effective_user.id)
-    user = upsert_user(user_id, update.effective_user.username or "")
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    digest = get_daily_digest(today)
-
-    if not digest:
-        # 尝试生成
-        await update.message.reply_text("📊 正在生成今日日报...")
-        smart_result = scan_smart_money()
-        if smart_result.get("aggr"):
-            digest = smart_result["aggr"].generate_digest()
-            save_daily_digest(today, digest)
-            digest = get_daily_digest(today)
-
-    if not digest:
-        await update.message.reply_text(
-            "📊 *Alpha 日报*\n\n今日暂无明显聪明钱动向。",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return
-
-    digest_data = digest
-    message = digest_data.get("message", "日报数据异常")
-    pushed = digest_data.get("pushed", False)
-
-    status_line = "✅ 已推送" if pushed else "📋 待推送"
-    msg = f"📊 *Alpha 日报 · {today}* [{status_line}]\n{message}"
-
+    """📩 Daily Digest（免费看摘要，Pro 看完整）"""
+    user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
     await update.message.reply_text(
-        msg,
+        render_digest(tier_of(user)),
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(user["status"]),
         disable_web_page_preview=True,
     )
+
 
 
 async def cmd_smart_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -588,71 +683,45 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard(user["status"]),
         )
 
-    elif data == "alpha":
+    elif data == "signals":
         await query.edit_message_text("🔍 正在扫描聪明钱信号...")
-        try:
-            smart_result = scan_smart_money()
-            hot_tokens = get_hot_tokens(limit=HEAT_TOP_N)
-            leaderboard = get_leaderboard(limit=10)
-        except Exception as e:
-            await query.edit_message_text(
-                f"⚠️ Alpha 扫描出错: {e}\n请稍后重试。",
-                reply_markup=main_menu_keyboard(user["status"]),
-            )
-            return
-
-        tier = tier_of(user)
-        if not hot_tokens:
-            await query.edit_message_text(
-                "📊 *Alpha 信号*\n\n暂无数据。稍后再试！",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=main_menu_keyboard(user["status"]),
-            )
-            return
-
-        # Free 用户只看 Top3 + 升级引导；Pro 看完整 Top10 + 排行
-        top_n = 10 if tier in ("paid", "trial") else 3
-        msg_lines = ["🧠 *Alpha 聪明钱信号*\n", "🔥 *24h 代币热度*\n"]
-        for i, t in enumerate(hot_tokens[:top_n], 1):
-            symbol = t["token_symbol"] or "?"
-            ce = CHAINS.get(t.get("chain", "ethereum"), {}).get("emoji", "📊")
-            msg_lines.append(f"  {i}. {ce} *{symbol}* — 🔥{t['heat_score']}")
-
-        if tier in ("paid", "trial"):
-            total_activity = sum(t["wallet_count"] for t in hot_tokens)
-            msg_lines.append(f"\n📊 总活动: {total_activity} 次聪明钱交易")
-            if leaderboard:
-                msg_lines.append("\n🏆 *聪明钱 Top5*")
-                cat_emoji = {"mm": "🏦", "vc": "💰", "trader": "🧠", "exchange": "🏦", "unknown": "❓"}
-                for w in leaderboard[:5]:
-                    emoji = cat_emoji.get(w.get("category", ""), "🧠")
-                    msg_lines.append(f"  {emoji} {w['nickname']} — ⭐{w['score']}")
-        else:
-            msg_lines.append("\n🔒 _完整 Top10 + 聪明钱排行为 Pro 专享_")
-            msg_lines.append("💎 升级 Pro 解锁 → /pay")
-
-        if smart_result.get("aggr"):
-            digest = smart_result["aggr"].generate_digest()
-            save_daily_digest(digest["date"], digest)
-
         await query.edit_message_text(
-            "\n".join(msg_lines),
+            render_signals(tier_of(user)),
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_menu_keyboard(user["status"]),
             disable_web_page_preview=True,
         )
 
-    elif data == "pay":
-        chain = PAYOUT_CHAIN.upper()
+    elif data in ("hot", "alpha"):
+        await query.edit_message_text("🔍 正在扫描热门代币...")
         await query.edit_message_text(
-            f"💎 *升级付费版 · ${PRICE_USDT} USDT/月*\n\n"
-
-            f"📤 支付到:\n`{PAYOUT_WALLET}`\n({chain} TRC20)\n\n"
-            "支付后用 /verify 验证",
+            render_hot(tier_of(user)),
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 返回", callback_data="status")
-            ]]),
+            reply_markup=main_menu_keyboard(user["status"]),
+            disable_web_page_preview=True,
+        )
+
+    elif data == "digest":
+        await query.edit_message_text(
+            render_digest(tier_of(user)),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(user["status"]),
+            disable_web_page_preview=True,
+        )
+
+    elif data == "track":
+        await query.edit_message_text(
+            render_track(),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(user["status"]),
+            disable_web_page_preview=True,
+        )
+
+    elif data in ("upgrade", "pay"):
+        await query.edit_message_text(
+            render_upgrade(),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(user["status"]),
             disable_web_page_preview=True,
         )
 
@@ -969,18 +1038,24 @@ def main():
         print(f"🌐 Using proxy: {TG_PROXY}")
     app = builder.build()
 
-    # 命令
+    # 命令 · Alpha Intelligence 主菜单（5 键）
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("signals", cmd_signals))   # 🚨 Live Signals
+    app.add_handler(CommandHandler("hot", cmd_hot))           # 🔥 Hot Tokens
+    app.add_handler(CommandHandler("digest", cmd_digest))     # 📩 Daily Digest
+    app.add_handler(CommandHandler("track", cmd_track))       # 📊 Track Record
+    app.add_handler(CommandHandler("upgrade", cmd_upgrade))   # 💎 Upgrade Pro
+    # 兼容/次要命令（不在主菜单暴露）
+    app.add_handler(CommandHandler("pay", cmd_pay))           # → /upgrade
+    app.add_handler(CommandHandler("alpha", cmd_alpha))       # → /hot
+    app.add_handler(CommandHandler("verify", cmd_verify))
     app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("pay", cmd_pay))
     app.add_handler(CommandHandler("add", cmd_add))
     app.add_handler(CommandHandler("remove", cmd_remove))
     app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("verify", cmd_verify))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
-    app.add_handler(CommandHandler("alpha", cmd_alpha))
-    app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("smart", cmd_smart_wallets))
+
 
     # 按钮
     app.add_handler(CallbackQueryHandler(callback_handler))
