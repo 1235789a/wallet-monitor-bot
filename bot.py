@@ -18,7 +18,10 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    BotCommand, MenuButtonCommands,
+)
 from telegram.error import Conflict, NetworkError, TimedOut
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -819,7 +822,13 @@ async def handle_verify_message(update: Update, context: ContextTypes.DEFAULT_TY
     chain = detect_chain_from_address(text)
 
     if chain == "unknown":
-        return  # 不是地址，忽略
+        # 不是钱包地址：弹出主菜单，方便用户无需 /start 即可看到功能入口
+        await update.message.reply_text(
+            "👇 选择一个功能 / Choose an option:",
+            reply_markup=main_menu_keyboard(user["status"]),
+            disable_web_page_preview=True,
+        )
+        return
 
     await update.message.reply_text("🔍 检测到钱包地址，正在查询支付记录...")
     result = check_payment(text, chain)
@@ -1021,7 +1030,33 @@ def main():
     init_db()
     print(f"🐋 Whale Tracker Bot starting...")
 
+    # 启动时导入内置聪明钱种子地址（幂等：已存在则跳过/合并），
+    # 让 /signals /hot /digest 扫描有真实地址可用。失败不阻塞启动。
+    try:
+        conn = get_conn()
+        inserted, skipped = seed_database(conn)
+        conn.close()
+        print(f"🌱 Seed smart wallets: {inserted} inserted, {skipped} skipped.")
+    except Exception as e:
+        print(f"⚠️ Seed smart wallets skipped (non-fatal): {e}")
+
     async def post_init(application: Application):
+        # 注册斜杠命令菜单（输入框旁蓝色 Menu 按钮），用户无需记命令即可点选。
+        # 仅暴露 5 个主功能 + /start，旧钱包命令不进菜单。
+        try:
+            await application.bot.set_my_commands([
+                BotCommand("start", "🏠 Home / 主菜单"),
+                BotCommand("signals", "🚨 Live Signals"),
+                BotCommand("hot", "🔥 Hot Tokens"),
+                BotCommand("digest", "📩 Daily Digest"),
+                BotCommand("track", "📊 Track Record"),
+                BotCommand("upgrade", "💎 Upgrade Pro"),
+            ])
+            await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+            print("✅ Bot commands & menu button registered.")
+        except Exception as e:
+            print(f"⚠️ set_my_commands skipped (non-fatal): {e}")
+
         # 在 run_polling 创建的事件循环中启动后台协程
         # 用 asyncio.create_task（而非 application.create_task）：这些是常驻后台循环，
         # 随进程生命周期运行，不需要 PTB 在关闭时 await，避免 PTBUserWarning。
