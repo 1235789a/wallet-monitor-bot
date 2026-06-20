@@ -55,6 +55,7 @@ from monitor import (
 )
 
 from alpha import AlphaAggregator
+from public_feed import render_public_hot, render_public_signals
 
 # Founding Pro 限量名额（用于 /upgrade 文案 "first N users"）。仅 bot.py 读取，不改 config。
 FOUNDING_USER_LIMIT = int(os.environ.get("FOUNDING_USER_LIMIT", "20"))
@@ -104,6 +105,18 @@ def render_signals(tier: str) -> str:
     is_pro = tier in ("paid", "trial")
 
     if not txs:
+        # 聪明钱暂无信号 → 回退到真实公开 DEX 市场动向（GeckoTerminal/DexScreener）
+        public = render_public_signals(limit=5)
+        if public:
+            base = (
+                "🚨 *Live Signals*\n\n"
+                "聪明钱当前暂无新动作，先看实时市场动向：\n\n"
+                f"{public}"
+            )
+            if not is_pro:
+                base += "\n\n🔒 _免费版仅显示延迟预览_\n💎 升级 Pro 解锁聪明钱实时全量信号 → /upgrade"
+            return base
+
         base = (
             "🚨 *Live Signals*\n\n"
             "当前暂无新的聪明钱信号。新信号出现时会第一时间推送。"
@@ -137,6 +150,14 @@ def render_hot(tier: str) -> str:
     is_pro = tier in ("paid", "trial")
 
     if not hot_tokens:
+        # 聪明钱榜单为空 → 回退到真实公开 DEX 热门代币（GeckoTerminal/DexScreener）
+        public = render_public_hot(limit=8 if is_pro else 3)
+        if public:
+            base = public
+            if not is_pro:
+                base += "\n\n🔒 _免费版仅显示前 3 名_\n💎 升级 Pro 解锁完整榜单 + 聪明钱排行 → /upgrade"
+            return base
+
         base = "🔥 *Hot Tokens*\n\n暂无数据。聪明钱开始活跃后这里会出现热门代币榜。"
         if not is_pro:
             base += "\n\n💎 升级 Pro 解锁完整榜单 → /upgrade"
@@ -182,9 +203,22 @@ def render_digest(tier: str) -> str:
     is_pro = tier in ("paid", "trial")
 
     if not digest:
+        # 聪明钱日报为空 → 回退到真实公开 DEX 热门代币概览（GeckoTerminal/DexScreener）
+        public = render_public_hot(limit=5 if is_pro else 3)
+        if public:
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            base = (
+                f"📩 *Daily Digest · {today_str}*\n\n"
+                "今日聪明钱暂无明显动向，附上实时市场热度概览：\n\n"
+                f"{public}"
+            )
+            if not is_pro:
+                base += "\n\n🔒 _免费版仅摘要_\n💎 升级 Pro 查看完整 Alpha 日报 → /upgrade"
+            return base
+
         base = "📩 *Daily Digest*\n\n今日暂无明显聪明钱动向。日报会在每日聪明钱活跃后生成。"
         if not is_pro:
-            base += "\n\n💎 升级 Pro 查看完整 Alpha 日报 → /upgrade"
+            base += "\n\n 升级 Pro 查看完整 Alpha 日报 → /upgrade"
         return base
 
     message = digest.get("message", "")
