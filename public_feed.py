@@ -222,7 +222,7 @@ def _chain_key_from_ds(ds_chain: str) -> str:
 # 对外统一入口
 # ============================================================
 
-def get_trending_tokens(chains=None, limit: int = 10) -> list:
+def get_trending_tokens(chains=None, limit: int = 10, force_refresh: bool = False) -> list:
     """
     获取真实公开 DEX 热门代币（多链聚合，按 24h 交易量降序）。
 
@@ -230,6 +230,7 @@ def get_trending_tokens(chains=None, limit: int = 10) -> list:
     ----------
     chains : list[str] | None  内部 chain key 列表，缺省 ['ethereum', 'bsc']
     limit  : 每条链最多取多少，最终聚合后也按此截断
+    force_refresh : True 时绕过 5 分钟缓存，强制重新拉取（供 Refresh 按钮使用）
 
     Returns
     -------
@@ -239,9 +240,11 @@ def get_trending_tokens(chains=None, limit: int = 10) -> list:
         chains = ["ethereum", "bsc"]
 
     cache_key = f"trending:{','.join(chains)}:{limit}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
+    if not force_refresh:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
 
     aggregated = []
     for chain_key in chains:
@@ -279,19 +282,41 @@ def _fmt_vol(v: float) -> str:
     return f"${v:,.0f}"
 
 
-def render_public_hot(limit: int = 8) -> str:
-    """
-    渲染"公开真实热门代币"文本块（Markdown）。
-    供 Hot Tokens / Daily Digest 空态回退使用。失败返回空串。
-    """
-    tokens = get_trending_tokens(chains=["ethereum", "bsc"], limit=limit)
-    if not tokens:
-        return ""
+# 公开 feed 拉取的总池子大小（足够支撑多页浏览）
+_POOL_SIZE = 20
+_CHAIN_EMOJI = {"ethereum": "🔷", "bsc": "🟡", "tron": "🔴"}
 
-    lines = ["🔥 *Trending Tokens · 真实 DEX 实时热度*\n"]
-    chain_emoji = {"ethereum": "🔷", "bsc": "🟡", "tron": "🔴"}
-    for i, t in enumerate(tokens, 1):
-        ce = chain_emoji.get(t["chain"], "📊")
+
+def render_public_hot_page(page: int = 0, per_page: int = 5,
+                           force_refresh: bool = False) -> dict:
+    """
+    Render one page of real public DEX trending tokens (sorted by 24h volume).
+
+    Returns
+    -------
+    dict {
+        "text": str,        # Markdown body (empty string if no data)
+        "has_prev": bool,
+        "has_next": bool,
+        "page": int,
+        "total_pages": int,
+    }
+    """
+    tokens = get_trending_tokens(
+        chains=["ethereum", "bsc"], limit=_POOL_SIZE, force_refresh=force_refresh
+    )
+    if not tokens:
+        return {"text": "", "has_prev": False, "has_next": False,
+                "page": 0, "total_pages": 0}
+
+    total_pages = max(1, (len(tokens) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    start = page * per_page
+    chunk = tokens[start:start + per_page]
+
+    lines = ["🔥 *Trending Tokens · Live DEX Heat*\n"]
+    for i, t in enumerate(chunk, start + 1):
+        ce = _CHAIN_EMOJI.get(t["chain"], "📊")
         chg = t.get("change_24h", 0)
         arrow = "🟢" if chg >= 0 else "🔴"
         lines.append(
@@ -299,26 +324,43 @@ def render_public_hot(limit: int = 8) -> str:
             f"{arrow}{chg:+.1f}% | Vol {_fmt_vol(t['volume_24h'])}"
         )
 
-    src = tokens[0].get("source", "GeckoTerminal")
-    lines.append(f"\n_数据来源: {src} 公开 DEX 数据（真实实时）_")
-    return "\n".join(lines)
+    src = chunk[0].get("source", "GeckoTerminal")
+    lines.append(f"\n_Source: {src} public DEX data (live)_")
+    lines.append(f"_Page {page + 1}/{total_pages}_")
+
+    return {
+        "text": "\n".join(lines),
+        "has_prev": page > 0,
+        "has_next": page < total_pages - 1,
+        "page": page,
+        "total_pages": total_pages,
+    }
 
 
-def render_public_signals(limit: int = 5) -> str:
+def render_public_signals_page(page: int = 0, per_page: int = 5,
+                               force_refresh: bool = False) -> dict:
     """
-    渲染"公开真实市场动向"作为 Live Signals 空态回退。失败返回空串。
-    用 24h 涨幅最大的代币作为"市场正在关注"的近似信号。
+    Render one page of real public DEX market movers (sorted by 24h change),
+    used as the Live Signals fallback when smart money has no fresh data.
+
+    Returns the same dict shape as render_public_hot_page.
     """
-    tokens = get_trending_tokens(chains=["ethereum", "bsc"], limit=limit * 2)
+    tokens = get_trending_tokens(
+        chains=["ethereum", "bsc"], limit=_POOL_SIZE, force_refresh=force_refresh
+    )
     if not tokens:
-        return ""
+        return {"text": "", "has_prev": False, "has_next": False,
+                "page": 0, "total_pages": 0}
 
-    # 按 24h 涨幅排序，展示市场动向
-    movers = sorted(tokens, key=lambda r: r.get("change_24h", 0), reverse=True)[:limit]
-    lines = ["🚨 *Market Signals · 真实 DEX 市场动向*\n"]
-    chain_emoji = {"ethereum": "🔷", "bsc": "🟡", "tron": "🔴"}
-    for t in movers:
-        ce = chain_emoji.get(t["chain"], "📊")
+    movers = sorted(tokens, key=lambda r: r.get("change_24h", 0), reverse=True)
+    total_pages = max(1, (len(movers) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    start = page * per_page
+    chunk = movers[start:start + per_page]
+
+    lines = ["🚨 *Market Signals · Live DEX Movers*\n"]
+    for t in chunk:
+        ce = _CHAIN_EMOJI.get(t["chain"], "📊")
         chg = t.get("change_24h", 0)
         arrow = "🟢" if chg >= 0 else "🔴"
         lines.append(
@@ -326,9 +368,30 @@ def render_public_signals(limit: int = 5) -> str:
             f"| {_fmt_price(t['price_usd'])} | Vol {_fmt_vol(t['volume_24h'])}"
         )
 
-    src = movers[0].get("source", "GeckoTerminal")
-    lines.append(f"\n_数据来源: {src} 公开 DEX 数据（真实实时）_")
-    return "\n".join(lines)
+    src = chunk[0].get("source", "GeckoTerminal")
+    lines.append(f"\n_Source: {src} public DEX data (live)_")
+    lines.append(f"_Page {page + 1}/{total_pages}_")
+
+    return {
+        "text": "\n".join(lines),
+        "has_prev": page > 0,
+        "has_next": page < total_pages - 1,
+        "page": page,
+        "total_pages": total_pages,
+    }
+
+
+def render_public_hot(limit: int = 8) -> str:
+    """Backward-compatible single-block English render (used by digest fallback)."""
+    result = render_public_hot_page(page=0, per_page=limit)
+    return result["text"]
+
+
+def render_public_signals(limit: int = 5) -> str:
+    """Backward-compatible single-block English render."""
+    result = render_public_signals_page(page=0, per_page=limit)
+    return result["text"]
+
 
 
 # ============================================================

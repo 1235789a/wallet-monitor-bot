@@ -55,7 +55,16 @@ from monitor import (
 )
 
 from alpha import AlphaAggregator
-from public_feed import render_public_hot, render_public_signals
+from public_feed import (
+    render_public_hot, render_public_signals,
+    render_public_hot_page, render_public_signals_page,
+)
+
+# 分页：每页条数
+HOT_PER_PAGE = 5
+SIGNALS_PER_PAGE = 5
+REFRESH_FAIL_MSG = "Unable to refresh data right now. Please try again later."
+
 
 # Founding Pro 限量名额（用于 /upgrade 文案 "first N users"）。仅 bot.py 读取，不改 config。
 FOUNDING_USER_LIMIT = int(os.environ.get("FOUNDING_USER_LIMIT", "20"))
@@ -90,81 +99,128 @@ def main_menu_keyboard(status: str = ""):
     return InlineKeyboardMarkup(buttons)
 
 
+def paging_keyboard(kind: str, page: int, has_prev: bool, has_next: bool):
+    """
+    分页键盘：◀️ Prev / ▶️ Next / 🔄 Refresh / 🏠 Menu
+    kind: 'hot' 或 'signals'，callback_data 形如 hot_page:1 / signals_page:0 / hot_refresh / menu
+    无上/下一页时该按钮不显示（避免越界与误点）。
+    """
+    nav = []
+    if has_prev:
+        nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"{kind}_page:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton("▶️ Next", callback_data=f"{kind}_page:{page + 1}"))
+
+    rows = []
+    if nav:
+        rows.append(nav)
+    rows.append([
+        InlineKeyboardButton("🔄 Refresh", callback_data=f"{kind}_refresh"),
+        InlineKeyboardButton("🏠 Menu", callback_data="menu"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
 # ============================================================
 # 渲染辅助（命令与按钮共用，免费/Pro 分层）
 # ============================================================
 
-def render_signals(tier: str) -> str:
-    """🚨 Live Signals：免费看 delayed preview（脱敏），Pro 看完整。"""
+def render_signals_paged(tier: str, page: int = 0, force_refresh: bool = False) -> dict:
+    """
+    🚨 Live Signals with pagination.
+
+    Smart money first; if empty, fall back to real public DEX market movers.
+    Returns {"text", "has_prev", "has_next", "page", "is_keyboard": bool}.
+    """
+    is_pro = tier in ("paid", "trial")
+
     try:
         result = scan_smart_money()
         txs = result.get("txs", []) or []
-    except Exception as e:
-        return f"🚨 *Live Signals*\n\n⚠️ 信号扫描暂时出错: {e}\n请稍后重试。"
+    except Exception:
+        txs = []
 
-    is_pro = tier in ("paid", "trial")
+    # 有真实聪明钱信号 → 优先展示（保持现有 Free/Pro 分层），单页呈现
+    if txs:
+        per_page = SIGNALS_PER_PAGE if is_pro else 3
+        shown = txs[:per_page]
+        lines = ["🚨 *Live Signals · Smart Money*\n"]
+        for tx in shown:
+            lines.append(format_smart_alert(tx, tier=tier))
+            lines.append("—" * 6)
+        if not is_pro:
+            lines.append("\n🔒 _Free tier shows a delayed, masked preview (no tx link / no entry price)_")
+            lines.append("💎 Upgrade to Pro for real-time full signals → /upgrade")
+        return {"text": "\n".join(lines), "has_prev": False,
+                "has_next": False, "page": 0}
 
-    if not txs:
-        # 聪明钱暂无信号 → 回退到真实公开 DEX 市场动向（GeckoTerminal/DexScreener）
-        public = render_public_signals(limit=5)
-        if public:
-            base = (
-                "🚨 *Live Signals*\n\n"
-                "聪明钱当前暂无新动作，先看实时市场动向：\n\n"
-                f"{public}"
-            )
-            if not is_pro:
-                base += "\n\n🔒 _免费版仅显示延迟预览_\n💎 升级 Pro 解锁聪明钱实时全量信号 → /upgrade"
-            return base
-
+    # 聪明钱为空 → 回退到真实公开 DEX 市场动向（分页）
+    per_page = SIGNALS_PER_PAGE if is_pro else 3
+    pg = render_public_signals_page(page=page, per_page=per_page,
+                                    force_refresh=force_refresh)
+    if pg["text"]:
         base = (
             "🚨 *Live Signals*\n\n"
-            "当前暂无新的聪明钱信号。新信号出现时会第一时间推送。"
+            "_No fresh smart money moves right now. Showing live market movers:_\n\n"
+            f"{pg['text']}"
         )
         if not is_pro:
-            base += "\n\n🔒 _免费版仅显示延迟预览（脱敏）_\n💎 升级 Pro 解锁实时全量信号 → /upgrade"
-        return base
+            base += "\n\n💎 Upgrade to Pro for real-time smart money signals → /upgrade"
+        return {"text": base, "has_prev": pg["has_prev"],
+                "has_next": pg["has_next"], "page": pg["page"]}
 
-    # 最多展示 5 条
-    lines = ["🚨 *Live Signals · 聪明钱实时动向*\n"]
-    shown = txs[:5] if is_pro else txs[:3]
-    for tx in shown:
-        lines.append(format_smart_alert(tx, tier=tier))
-        lines.append("—" * 6)
-
+    # 公开源也没数据
+    base = (
+        "🚨 *Live Signals*\n\n"
+        "No signals available right now. New signals are pushed in real time as they appear."
+    )
     if not is_pro:
-        lines.append("\n🔒 _免费版为延迟预览：地址脱敏 / 无 tx 链接 / 无 entry price_")
-        lines.append("💎 升级 Pro 解锁实时全量信号 → /upgrade")
-    return "\n".join(lines)
+        base += "\n\n💎 Upgrade to Pro for real-time full signals → /upgrade"
+    return {"text": base, "has_prev": False, "has_next": False, "page": 0}
 
 
-def render_hot(tier: str) -> str:
-    """🔥 Hot Tokens：免费最多看前 3，Pro 看完整 Top N。"""
+def render_signals(tier: str) -> str:
+    """Backward-compatible single-block render (no keyboard)."""
+    return render_signals_paged(tier)["text"]
+
+
+
+def render_hot_paged(tier: str, page: int = 0, force_refresh: bool = False) -> dict:
+    """
+    🔥 Hot Tokens with pagination.
+
+    Smart money heat first; if empty, fall back to real public DEX trending
+    tokens (paged). Returns {"text","has_prev","has_next","page"}.
+    """
+    is_pro = tier in ("paid", "trial")
+
     try:
         scan_smart_money()
         hot_tokens = get_hot_tokens(limit=HEAT_TOP_N)
         leaderboard = get_leaderboard(limit=10)
-    except Exception as e:
-        return f"🔥 *Hot Tokens*\n\n⚠️ 热度扫描暂时出错: {e}\n请稍后重试。"
+    except Exception:
+        hot_tokens, leaderboard = [], []
 
-    is_pro = tier in ("paid", "trial")
-
+    # 聪明钱榜单为空 → 回退到真实公开 DEX 热门代币（分页）
     if not hot_tokens:
-        # 聪明钱榜单为空 → 回退到真实公开 DEX 热门代币（GeckoTerminal/DexScreener）
-        public = render_public_hot(limit=8 if is_pro else 3)
-        if public:
-            base = public
+        per_page = HOT_PER_PAGE if is_pro else 3
+        pg = render_public_hot_page(page=page, per_page=per_page,
+                                    force_refresh=force_refresh)
+        if pg["text"]:
+            base = pg["text"]
             if not is_pro:
-                base += "\n\n🔒 _免费版仅显示前 3 名_\n💎 升级 Pro 解锁完整榜单 + 聪明钱排行 → /upgrade"
-            return base
+                base += "\n\n💎 Upgrade to Pro for the full leaderboard + smart money ranking → /upgrade"
+            return {"text": base, "has_prev": pg["has_prev"],
+                    "has_next": pg["has_next"], "page": pg["page"]}
 
-        base = "🔥 *Hot Tokens*\n\n暂无数据。聪明钱开始活跃后这里会出现热门代币榜。"
+        base = "🔥 *Hot Tokens*\n\nNo data right now. The leaderboard appears once smart money becomes active."
         if not is_pro:
-            base += "\n\n💎 升级 Pro 解锁完整榜单 → /upgrade"
-        return base
+            base += "\n\n💎 Upgrade to Pro for the full leaderboard → /upgrade"
+        return {"text": base, "has_prev": False, "has_next": False, "page": 0}
 
+    # 有真实聪明钱热度 → 单页呈现（保持现有 Free/Pro 分层）
     top_n = HEAT_TOP_N if is_pro else 3
-    lines = ["🔥 *Hot Tokens · 24h 聪明钱热度榜*\n"]
+    lines = ["🔥 *Hot Tokens · 24h Smart Money Heat*\n"]
     for i, t in enumerate(hot_tokens[:top_n], 1):
         symbol = t["token_symbol"] or "?"
         ce = CHAINS.get(t.get("chain", "ethereum"), {}).get("emoji", "📊")
@@ -172,17 +228,24 @@ def render_hot(tier: str) -> str:
 
     if is_pro:
         total_activity = sum(t["wallet_count"] for t in hot_tokens)
-        lines.append(f"\n📊 总活动: {total_activity} 次聪明钱交易")
+        lines.append(f"\n📊 Total activity: {total_activity} smart money trades")
         if leaderboard:
-            lines.append("\n🏆 *聪明钱 Top5*")
+            lines.append("\n🏆 *Smart Money Top5*")
             cat_emoji = {"mm": "🏦", "vc": "💰", "trader": "🧠", "exchange": "🏦", "unknown": "❓"}
             for w in leaderboard[:5]:
                 emoji = cat_emoji.get(w.get("category", ""), "🧠")
                 lines.append(f"  {emoji} {w['nickname']} — ⭐{w['score']}")
     else:
-        lines.append(f"\n🔒 _免费版仅显示前 3 名 · 完整 Top{HEAT_TOP_N} + 聪明钱排行为 Pro 专享_")
-        lines.append("💎 升级 Pro 解锁 → /upgrade")
-    return "\n".join(lines)
+        lines.append(f"\n🔒 _Free tier shows top 3 only · Full Top{HEAT_TOP_N} + smart money ranking is Pro_")
+        lines.append("💎 Upgrade to Pro → /upgrade")
+    return {"text": "\n".join(lines), "has_prev": False,
+            "has_next": False, "page": 0}
+
+
+def render_hot(tier: str) -> str:
+    """Backward-compatible single-block render (no keyboard)."""
+    return render_hot_paged(tier)["text"]
+
 
 
 def render_digest(tier: str) -> str:
@@ -209,16 +272,16 @@ def render_digest(tier: str) -> str:
             today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             base = (
                 f"📩 *Daily Digest · {today_str}*\n\n"
-                "今日聪明钱暂无明显动向，附上实时市场热度概览：\n\n"
+                "_No clear smart money moves today. Here's a live market heat overview:_\n\n"
                 f"{public}"
             )
             if not is_pro:
-                base += "\n\n🔒 _免费版仅摘要_\n💎 升级 Pro 查看完整 Alpha 日报 → /upgrade"
+                base += "\n\n💎 Upgrade to Pro for the full Alpha digest → /upgrade"
             return base
 
-        base = "📩 *Daily Digest*\n\n今日暂无明显聪明钱动向。日报会在每日聪明钱活跃后生成。"
+        base = "📩 *Daily Digest*\n\nNo clear smart money moves today. The digest is generated once smart money becomes active."
         if not is_pro:
-            base += "\n\n 升级 Pro 查看完整 Alpha 日报 → /upgrade"
+            base += "\n\n💎 Upgrade to Pro for the full Alpha digest → /upgrade"
         return base
 
     message = digest.get("message", "")
@@ -231,9 +294,10 @@ def render_digest(tier: str) -> str:
     return (
         f"📩 *Daily Alpha Digest · {today}*\n\n"
         f"{preview}\n\n"
-        "🔒 _免费版仅显示摘要_\n"
-        "💎 升级 Pro 查看完整日报（含代币、聪明钱、方向明细）→ /upgrade"
+        "🔒 _Free tier shows a summary only_\n"
+        "💎 Upgrade to Pro for the full digest (tokens, smart money, direction details) → /upgrade"
     )
+
 
 
 def render_track() -> str:
@@ -315,25 +379,28 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 
 async def cmd_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🚨 Live Signals"""
+    """🚨 Live Signals（分页）"""
     user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
+    res = render_signals_paged(tier_of(user), page=0)
     await update.message.reply_text(
-        render_signals(tier_of(user)),
+        res["text"],
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=main_menu_keyboard(user["status"]),
+        reply_markup=paging_keyboard("signals", res["page"], res["has_prev"], res["has_next"]),
         disable_web_page_preview=True,
     )
 
 
 async def cmd_hot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🔥 Hot Tokens"""
+    """🔥 Hot Tokens（分页）"""
     user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
+    res = render_hot_paged(tier_of(user), page=0)
     await update.message.reply_text(
-        render_hot(tier_of(user)),
+        res["text"],
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=main_menu_keyboard(user["status"]),
+        reply_markup=paging_keyboard("hot", res["page"], res["has_prev"], res["has_next"]),
         disable_web_page_preview=True,
     )
+
 
 
 async def cmd_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -537,8 +604,8 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.message.reply_text(
-            "用法: `/verify <你的付款钱包地址>`\n"
-            f"系统会检查该地址是否已向你的收款地址转了 ${PRICE_USDT} USDT",
+            "Usage: `/verify <your_payment_wallet_address>`\n"
+            f"We'll check whether that address sent ${PRICE_USDT} USDT to our payout address.",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -546,10 +613,10 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wallet = context.args[0].strip()
     chain = detect_chain_from_address(wallet)
     if chain == "unknown":
-        await update.message.reply_text("❌ 地址格式无效。支持 Tron (T开头) 和 EVM (0x开头)")
+        await update.message.reply_text("❌ Invalid address format. Tron (starts with T) and EVM (starts with 0x) are supported.")
         return
 
-    await update.message.reply_text("🔍 正在检查链上支付记录...")
+    await update.message.reply_text("🔍 Checking on-chain payment records...")
 
     result = check_payment(wallet, chain)
 
@@ -568,26 +635,27 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         await update.message.reply_text(
-            f"✅ *支付验证成功！*\n\n"
-            f"💰 收到: {amount:.2f} USDT\n"
+            f"✅ *Payment verified!*\n\n"
+            f"💰 Received: {amount:.2f} USDT\n"
             f"🔗 TX: `{tx_hash[:20]}...`\n"
-            f"📅 有效期至: {datetime.now().strftime('%m/%d %H:%M')}\n\n"
-            f"现在可以用 /add 添加更多追踪地址了！",
+            f"📅 Valid until: {datetime.now().strftime('%m/%d %H:%M')}\n\n"
+            f"You can now use /add to track more wallets!",
             parse_mode=ParseMode.MARKDOWN,
         )
     elif result.get("error"):
         await update.message.reply_text(
-            f"⚠️ 检查失败: {result['error']}\n请稍后重试或联系客服。"
+            f"⚠️ Check failed: {result['error']}\nPlease try again later or contact support."
         )
     else:
         await update.message.reply_text(
-            "❌ 未检测到支付记录。\n\n"
-            "请确认:\n"
-            f"• 已向 `{PAYOUT_WALLET[:10]}...` 转了 ≥ {PRICE_USDT} USDT\n"
-            "• 使用正确链 (Tron TRC20)\n"
-            "• 交易已经上链确认\n\n"
-            "然后重试: `/verify <你的付款地址>`"
+            "❌ No payment record found.\n\n"
+            "Please confirm:\n"
+            f"• You sent ≥ {PRICE_USDT} USDT to `{PAYOUT_WALLET[:10]}...`\n"
+            "• You used the correct chain (Tron TRC20)\n"
+            "• The transaction is confirmed on-chain\n\n"
+            "Then retry: `/verify <your_payment_address>`"
         )
+
 
 
 async def cmd_alpha(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -683,7 +751,34 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 回调处理
 # ============================================================
 
+async def _safe_edit(query, text: str, reply_markup=None):
+    """
+    安全地 edit_message_text：
+    - 翻页/刷新时若内容与当前完全一致，Telegram 会抛 "message is not modified"，
+      这里吞掉该错误，避免按钮点击报错。
+    - 其它异常也兜底，不让回调崩溃。
+    """
+    try:
+        await query.edit_message_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "not modified" in msg:
+            return  # 内容没变（如刷新后数据一致），静默忽略
+        # 其它错误：尝试无 markdown 再发一次，最终失败则忽略
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup,
+                                          disable_web_page_preview=True)
+        except Exception:
+            pass
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     """处理按钮点击"""
     query = update.callback_query
     await query.answer()
@@ -720,23 +815,54 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard(user["status"]),
         )
 
-    elif data == "signals":
-        await query.edit_message_text("🔍 正在扫描聪明钱信号...")
+    elif data == "menu":
+        # 🏠 返回主菜单
         await query.edit_message_text(
-            render_signals(tier_of(user)),
-            parse_mode=ParseMode.MARKDOWN,
+            "👇 Choose an option:",
             reply_markup=main_menu_keyboard(user["status"]),
             disable_web_page_preview=True,
         )
 
-    elif data in ("hot", "alpha"):
-        await query.edit_message_text("🔍 正在扫描热门代币...")
-        await query.edit_message_text(
-            render_hot(tier_of(user)),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=main_menu_keyboard(user["status"]),
-            disable_web_page_preview=True,
+    elif data == "signals" or data == "signals_refresh" or data.startswith("signals_page:"):
+        # Live Signals：首次打开 / 翻页 / 刷新（refresh 绕过缓存）
+        page = 0
+        force = False
+        if data.startswith("signals_page:"):
+            try:
+                page = max(0, int(data.split(":", 1)[1]))
+            except ValueError:
+                page = 0
+        elif data == "signals_refresh":
+            force = True
+        try:
+            res = render_signals_paged(tier_of(user), page=page, force_refresh=force)
+        except Exception:
+            res = {"text": REFRESH_FAIL_MSG, "has_prev": False, "has_next": False, "page": 0}
+        await _safe_edit(
+            query, res["text"],
+            paging_keyboard("signals", res["page"], res["has_prev"], res["has_next"]),
         )
+
+    elif data in ("hot", "alpha") or data == "hot_refresh" or data.startswith("hot_page:"):
+        # Hot Tokens：首次打开 / 翻页 / 刷新（refresh 绕过缓存）
+        page = 0
+        force = False
+        if data.startswith("hot_page:"):
+            try:
+                page = max(0, int(data.split(":", 1)[1]))
+            except ValueError:
+                page = 0
+        elif data == "hot_refresh":
+            force = True
+        try:
+            res = render_hot_paged(tier_of(user), page=page, force_refresh=force)
+        except Exception:
+            res = {"text": REFRESH_FAIL_MSG, "has_prev": False, "has_next": False, "page": 0}
+        await _safe_edit(
+            query, res["text"],
+            paging_keyboard("hot", res["page"], res["has_prev"], res["has_next"]),
+        )
+
 
     elif data == "digest":
         await query.edit_message_text(
@@ -849,7 +975,7 @@ async def handle_verify_message(update: Update, context: ContextTypes.DEFAULT_TY
     user = upsert_user(user_id, update.effective_user.username or "")
 
     if user["status"] == "paid":
-        await update.message.reply_text("💎 你已是付费用户！")
+        await update.message.reply_text("💎 You're already a Pro user!")
         return
 
     text = update.message.text.strip()
@@ -858,13 +984,14 @@ async def handle_verify_message(update: Update, context: ContextTypes.DEFAULT_TY
     if chain == "unknown":
         # 不是钱包地址：弹出主菜单，方便用户无需 /start 即可看到功能入口
         await update.message.reply_text(
-            "👇 选择一个功能 / Choose an option:",
+            "👇 Choose an option:",
             reply_markup=main_menu_keyboard(user["status"]),
             disable_web_page_preview=True,
         )
         return
 
-    await update.message.reply_text("🔍 检测到钱包地址，正在查询支付记录...")
+    await update.message.reply_text("🔍 Wallet address detected. Checking on-chain payment records...")
+
     result = check_payment(text, chain)
 
     if result.get("found"):
@@ -879,14 +1006,15 @@ async def handle_verify_message(update: Update, context: ContextTypes.DEFAULT_TY
         conn.close()
 
         await update.message.reply_text(
-            f"✅ *支付验证成功！*\n收到 {result['amount']:.2f} USDT\n有效期: {SUBSCRIPTION_DAYS} 天",
+            f"✅ *Payment verified!*\nReceived {result['amount']:.2f} USDT\nValid for: {SUBSCRIPTION_DAYS} days",
             parse_mode=ParseMode.MARKDOWN,
         )
     else:
         await update.message.reply_text(
-            "❌ 未找到支付记录。\n请用你的*付款钱包地址*重试。",
+            "❌ No payment record found.\nPlease retry using your *payment wallet address*.",
             parse_mode=ParseMode.MARKDOWN,
         )
+
 
 
 # ============================================================
