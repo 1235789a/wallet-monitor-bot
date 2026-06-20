@@ -53,7 +53,8 @@ PAYOUT_CHAIN = os.environ.get("PAYOUT_CHAIN", "tron")
 # 定价
 # ============================================================
 PRICE_USDT = float(os.environ.get("PRICE_USDT", "5"))        # 月费 USDT（比报告便宜，走量）
-TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "3"))          # 免费试用天数
+TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "1"))          # 免费试用天数（24h Pro Trial）
+
 SUBSCRIPTION_DAYS = int(os.environ.get("SUBSCRIPTION_DAYS", "30"))
 
 # ============================================================

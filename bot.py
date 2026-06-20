@@ -83,6 +83,67 @@ def tier_of(user: dict) -> str:
     return "free"
 
 
+# ============================================================
+# 用户状态栏（Free / Trial / Paid 体验提示）
+# ============================================================
+
+def _trial_time_left(user: dict) -> str:
+    """试用剩余时间，粗略到 days/hours（trial_end 为 naive datetime）。"""
+    te = user.get("trial_end")
+    if not te:
+        return "—"
+    try:
+        end = datetime.fromisoformat(te)
+    except (TypeError, ValueError):
+        return "—"
+    secs = (end - datetime.now()).total_seconds()
+    if secs <= 0:
+        return "0h"
+    days = int(secs // 86400)
+    hours = int((secs % 86400) // 3600)
+    if days > 0:
+        return f"{days}d {hours}h"
+    return f"{hours}h"
+
+
+def _paid_until_str(user: dict) -> str:
+    """付费到期日期（仅日期，无时间）。"""
+    pu = user.get("paid_until")
+    if not pu:
+        return "—"
+    try:
+        return datetime.fromisoformat(pu).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return "—"
+
+
+def render_status_bar(user: dict) -> str:
+    """
+    页面顶部英文状态栏，明确区分 Free / Trial / Paid。
+    Trial 在本项目里等同 Pro，状态栏会如实说明用户正在体验 Pro 数据。
+    """
+    status = user.get("status")
+    if status == "trial":
+        return (
+            f"🟢 *Status: Pro Trial · {_trial_time_left(user)} left*\n"
+            "_You are viewing Pro-level data during your trial._"
+        )
+    if status == "paid":
+        return f"💎 *Status: Pro Active · valid until {_paid_until_str(user)}*"
+    # expired / free
+    return (
+        "🔒 *Status: Free Preview*\n"
+        "_Upgrade to Pro to unlock wallet labels, tx links, full lists, "
+        "and real-time smart money alerts._"
+    )
+
+
+def with_status_bar(user: dict, body: str) -> str:
+    """在正文顶部拼接状态栏。"""
+    return f"{render_status_bar(user)}\n\n{body}"
+
+
+
 def main_menu_keyboard(status: str = ""):
     """主菜单 · Alpha Intelligence 5 键"""
     buttons = [
@@ -125,12 +186,36 @@ def paging_keyboard(kind: str, page: int, has_prev: bool, has_next: bool):
 # 渲染辅助（命令与按钮共用，免费/Pro 分层）
 # ============================================================
 
+# Free 锁定提示（统一文案）
+FREE_SIGNALS_LOCK = (
+    "\n🔒 _Pro unlocks wallet labels, tx links, exact entries, "
+    "and full signal context._\n"
+    "💎 Upgrade to Pro → /upgrade"
+)
+FREE_HOT_LOCK = (
+    "\n🔒 _Pro unlocks full leaderboard, pagination, refresh, "
+    "and smart money context._\n"
+    "💎 Upgrade to Pro → /upgrade"
+)
+FREE_DIGEST_LOCK = (
+    "\n🔒 _Pro unlocks full daily digest and smart money context._\n"
+    "💎 Upgrade to Pro → /upgrade"
+)
+# 公开 DEX 数据来源标注（诚实标注，绝不伪装成 smart money）
+FALLBACK_NOTE = (
+    "\n_Source: GeckoTerminal / DexScreener public DEX data._\n"
+    "_Smart money alerts will appear here when detected._"
+)
+
+
 def render_signals_paged(tier: str, page: int = 0, force_refresh: bool = False) -> dict:
     """
-    🚨 Live Signals with pagination.
+    🚨 Live Signals with pagination + Free/Pro 分层。
 
-    Smart money first; if empty, fall back to real public DEX market movers.
-    Returns {"text", "has_prev", "has_next", "page", "is_keyboard": bool}.
+    - Pro (paid/trial): 标题 "Pro Signal View"，有 smart money 时展示完整信号；
+      无 smart money 时回退公开 DEX，明确标注来源；可正常翻页。
+    - Free: 标题 "Public Market Preview"，最多 3 条，不展示 label/tx/entry，
+      底部加锁定提示；不允许翻页（has_next 永远 False）。
     """
     is_pro = tier in ("paid", "trial")
 
@@ -140,43 +225,55 @@ def render_signals_paged(tier: str, page: int = 0, force_refresh: bool = False) 
     except Exception:
         txs = []
 
-    # 有真实聪明钱信号 → 优先展示（保持现有 Free/Pro 分层），单页呈现
+    # 有真实聪明钱信号 → 优先展示
     if txs:
         per_page = SIGNALS_PER_PAGE if is_pro else 3
         shown = txs[:per_page]
-        lines = ["🚨 *Live Signals · Smart Money*\n"]
+        if is_pro:
+            lines = ["🚨 *Pro Signal View · Smart Money*\n"]
+            for tx in shown:
+                lines.append(format_smart_alert(tx, tier=tier))
+                lines.append("—" * 6)
+            return {"text": "\n".join(lines), "has_prev": False,
+                    "has_next": False, "page": 0}
+        # Free：脱敏预览（format_smart_alert free 分支已去 label/tx/entry）
+        lines = ["🚨 *Public Market Preview · Signals*\n"]
         for tx in shown:
-            lines.append(format_smart_alert(tx, tier=tier))
+            lines.append(format_smart_alert(tx, tier="free"))
             lines.append("—" * 6)
-        if not is_pro:
-            lines.append("\n🔒 _Free tier shows a delayed, masked preview (no tx link / no entry price)_")
-            lines.append("💎 Upgrade to Pro for real-time full signals → /upgrade")
+        lines.append(FREE_SIGNALS_LOCK)
         return {"text": "\n".join(lines), "has_prev": False,
                 "has_next": False, "page": 0}
 
-    # 聪明钱为空 → 回退到真实公开 DEX 市场动向（分页）
-    per_page = SIGNALS_PER_PAGE if is_pro else 3
-    pg = render_public_signals_page(page=page, per_page=per_page,
+    # 聪明钱为空 → 回退到真实公开 DEX 市场动向
+    if is_pro:
+        pg = render_public_signals_page(page=page, per_page=SIGNALS_PER_PAGE,
+                                        force_refresh=force_refresh)
+        if pg["text"]:
+            base = f"🚨 *Pro Signal View*\n\n{pg['text']}{FALLBACK_NOTE}"
+            return {"text": base, "has_prev": pg["has_prev"],
+                    "has_next": pg["has_next"], "page": pg["page"]}
+        base = (
+            "🚨 *Pro Signal View*\n\n"
+            "No signals available right now. New signals are pushed in real time as they appear."
+            f"{FALLBACK_NOTE}"
+        )
+        return {"text": base, "has_prev": False, "has_next": False, "page": 0}
+
+    # Free：只给第一页 preview（最多 3 条），不翻页
+    pg = render_public_signals_page(page=0, per_page=3,
                                     force_refresh=force_refresh)
     if pg["text"]:
-        base = (
-            "🚨 *Live Signals*\n\n"
-            "_No fresh smart money moves right now. Showing live market movers:_\n\n"
-            f"{pg['text']}"
-        )
-        if not is_pro:
-            base += "\n\n💎 Upgrade to Pro for real-time smart money signals → /upgrade"
-        return {"text": base, "has_prev": pg["has_prev"],
-                "has_next": pg["has_next"], "page": pg["page"]}
+        base = f"🚨 *Public Market Preview*\n\n{pg['text']}{FALLBACK_NOTE}{FREE_SIGNALS_LOCK}"
+        return {"text": base, "has_prev": False, "has_next": False, "page": 0}
 
-    # 公开源也没数据
     base = (
-        "🚨 *Live Signals*\n\n"
-        "No signals available right now. New signals are pushed in real time as they appear."
+        "🚨 *Public Market Preview*\n\n"
+        "No signals available right now."
+        f"{FREE_SIGNALS_LOCK}"
     )
-    if not is_pro:
-        base += "\n\n💎 Upgrade to Pro for real-time full signals → /upgrade"
     return {"text": base, "has_prev": False, "has_next": False, "page": 0}
+
 
 
 def render_signals(tier: str) -> str:
@@ -201,26 +298,39 @@ def render_hot_paged(tier: str, page: int = 0, force_refresh: bool = False) -> d
     except Exception:
         hot_tokens, leaderboard = [], []
 
-    # 聪明钱榜单为空 → 回退到真实公开 DEX 热门代币（分页）
+    # 聪明钱榜单为空 → 回退到真实公开 DEX 热门代币
     if not hot_tokens:
-        per_page = HOT_PER_PAGE if is_pro else 3
-        pg = render_public_hot_page(page=page, per_page=per_page,
-                                    force_refresh=force_refresh)
-        if pg["text"]:
-            base = pg["text"]
-            if not is_pro:
-                base += "\n\n💎 Upgrade to Pro for the full leaderboard + smart money ranking → /upgrade"
-            return {"text": base, "has_prev": pg["has_prev"],
-                    "has_next": pg["has_next"], "page": pg["page"]}
+        if is_pro:
+            pg = render_public_hot_page(page=page, per_page=HOT_PER_PAGE,
+                                        force_refresh=force_refresh)
+            if pg["text"]:
+                base = f"{pg['text']}{FALLBACK_NOTE}"
+                return {"text": base, "has_prev": pg["has_prev"],
+                        "has_next": pg["has_next"], "page": pg["page"]}
+            base = (
+                "🔥 *Hot Tokens*\n\n"
+                "No data right now. The leaderboard appears once smart money becomes active."
+                f"{FALLBACK_NOTE}"
+            )
+            return {"text": base, "has_prev": False, "has_next": False, "page": 0}
 
-        base = "🔥 *Hot Tokens*\n\nNo data right now. The leaderboard appears once smart money becomes active."
-        if not is_pro:
-            base += "\n\n💎 Upgrade to Pro for the full leaderboard → /upgrade"
+        # Free：只给第一页 preview（最多 3 条），不翻页
+        pg = render_public_hot_page(page=0, per_page=3, force_refresh=force_refresh)
+        if pg["text"]:
+            head = "🔥 *Public Hot Tokens Preview*\n\n"
+            base = f"{head}{pg['text']}{FALLBACK_NOTE}{FREE_HOT_LOCK}"
+            return {"text": base, "has_prev": False, "has_next": False, "page": 0}
+        base = (
+            "🔥 *Public Hot Tokens Preview*\n\n"
+            "No data right now."
+            f"{FREE_HOT_LOCK}"
+        )
         return {"text": base, "has_prev": False, "has_next": False, "page": 0}
 
     # 有真实聪明钱热度 → 单页呈现（保持现有 Free/Pro 分层）
     top_n = HEAT_TOP_N if is_pro else 3
-    lines = ["🔥 *Hot Tokens · 24h Smart Money Heat*\n"]
+    title = "🔥 *Hot Tokens · 24h Smart Money Heat*" if is_pro else "🔥 *Public Hot Tokens Preview*"
+    lines = [f"{title}\n"]
     for i, t in enumerate(hot_tokens[:top_n], 1):
         symbol = t["token_symbol"] or "?"
         ce = CHAINS.get(t.get("chain", "ethereum"), {}).get("emoji", "📊")
@@ -236,10 +346,10 @@ def render_hot_paged(tier: str, page: int = 0, force_refresh: bool = False) -> d
                 emoji = cat_emoji.get(w.get("category", ""), "🧠")
                 lines.append(f"  {emoji} {w['nickname']} — ⭐{w['score']}")
     else:
-        lines.append(f"\n🔒 _Free tier shows top 3 only · Full Top{HEAT_TOP_N} + smart money ranking is Pro_")
-        lines.append("💎 Upgrade to Pro → /upgrade")
+        lines.append(FREE_HOT_LOCK)
     return {"text": "\n".join(lines), "has_prev": False,
             "has_next": False, "page": 0}
+
 
 
 def render_hot(tier: str) -> str:
@@ -274,14 +384,18 @@ def render_digest(tier: str) -> str:
                 f"📩 *Daily Digest · {today_str}*\n\n"
                 "_No clear smart money moves today. Here's a live market heat overview:_\n\n"
                 f"{public}"
+                f"{FALLBACK_NOTE}"
             )
             if not is_pro:
-                base += "\n\n💎 Upgrade to Pro for the full Alpha digest → /upgrade"
+                base += FREE_DIGEST_LOCK
             return base
 
-        base = "📩 *Daily Digest*\n\nNo clear smart money moves today. The digest is generated once smart money becomes active."
+        base = (
+            "📩 *Daily Digest*\n\n"
+            "No clear smart money moves today. The digest is generated once smart money becomes active."
+        )
         if not is_pro:
-            base += "\n\n💎 Upgrade to Pro for the full Alpha digest → /upgrade"
+            base += FREE_DIGEST_LOCK
         return base
 
     message = digest.get("message", "")
@@ -293,10 +407,10 @@ def render_digest(tier: str) -> str:
     preview = message.strip().split("\n\n")[0] if message else ""
     return (
         f"📩 *Daily Alpha Digest · {today}*\n\n"
-        f"{preview}\n\n"
-        "🔒 _Free tier shows a summary only_\n"
-        "💎 Upgrade to Pro for the full digest (tokens, smart money, direction details) → /upgrade"
+        f"{preview}\n"
+        f"{FREE_DIGEST_LOCK}"
     )
+
 
 
 
@@ -321,19 +435,22 @@ def render_track() -> str:
     )
 
 
-def render_upgrade() -> str:
-    """💎 Upgrade Pro：Founding Pro 收款信息。"""
+# Pro 解锁清单（统一文案）
+_PRO_UNLOCKS = (
+    "Pro unlocks:\n"
+    "• Real-time smart money alerts\n"
+    "• Full wallet labels\n"
+    "• Tx links + entry prices\n"
+    "• Full hot tokens leaderboard\n"
+    "• Complete daily alpha digest\n"
+    "• Signal track record"
+)
+
+
+def _payment_instructions() -> str:
+    """付款 / 验证说明（TRON TRC20）。"""
     chain = PAYOUT_CHAIN.upper()
     return (
-        "💎 *Founding Pro*\n\n"
-        f"*{PRICE_USDT:.0f} USDT / month*\n"
-        f"Limited to the first {FOUNDING_USER_LIMIT} users.\n\n"
-        "Pro unlocks:\n"
-        "• Real-time smart money alerts\n"
-        "• Full wallet labels\n"
-        "• Tx links + entry prices\n"
-        "• Full hot tokens leaderboard\n"
-        "• Complete daily alpha digest\n\n"
         "*How to pay:*\n"
         f"🔗 Chain: *{chain} (TRC20)*\n"
         "📬 Address:\n"
@@ -342,6 +459,46 @@ def render_upgrade() -> str:
         "`/verify <your_wallet_address>`\n\n"
         "_(use the wallet address you paid from)_"
     )
+
+
+def render_upgrade(user: dict | None = None) -> str:
+    """
+    💎 Upgrade Pro，按用户状态分支：
+    - paid : 已是 Pro，不展示强付款文案
+    - trial: 提示试用剩余 + 续费引导 + 付款说明
+    - free / expired（或 user=None）: 完整收款页
+    """
+    status = (user or {}).get("status")
+
+    # 已付费：不再催付款
+    if status == "paid":
+        return (
+            "💎 *You are already Pro.*\n\n"
+            f"Valid until: *{_paid_until_str(user)}*\n\n"
+            "No payment needed right now.\n\n"
+            f"{_PRO_UNLOCKS}"
+        )
+
+    # 试用中：说明 trial = Pro，并引导续费
+    if status == "trial":
+        return (
+            "🟢 *You are on Pro Trial.*\n\n"
+            f"Trial ends in: *{_trial_time_left(user)}*\n\n"
+            "Keep Pro after trial:\n"
+            f"*{PRICE_USDT:.0f} USDT / month*\n\n"
+            f"{_PRO_UNLOCKS}\n\n"
+            f"{_payment_instructions()}"
+        )
+
+    # Free / expired / 未知：完整收款页
+    return (
+        "💎 *Upgrade to Pro*\n\n"
+        f"*{PRICE_USDT:.0f} USDT / month*\n"
+        f"Limited to the first {FOUNDING_USER_LIMIT} users.\n\n"
+        f"{_PRO_UNLOCKS}\n\n"
+        f"{_payment_instructions()}"
+    )
+
 
 
 
@@ -367,11 +524,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(
-        welcome,
+        with_status_bar(user_data, welcome),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_menu_keyboard(user_data["status"]),
         disable_web_page_preview=True,
     )
+
 
 
 # ============================================================
@@ -383,11 +541,12 @@ async def cmd_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
     res = render_signals_paged(tier_of(user), page=0)
     await update.message.reply_text(
-        res["text"],
+        with_status_bar(user, res["text"]),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=paging_keyboard("signals", res["page"], res["has_prev"], res["has_next"]),
         disable_web_page_preview=True,
     )
+
 
 
 async def cmd_hot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -395,7 +554,7 @@ async def cmd_hot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
     res = render_hot_paged(tier_of(user), page=0)
     await update.message.reply_text(
-        res["text"],
+        with_status_bar(user, res["text"]),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=paging_keyboard("hot", res["page"], res["has_prev"], res["has_next"]),
         disable_web_page_preview=True,
@@ -403,11 +562,12 @@ async def cmd_hot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+
 async def cmd_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """📊 Track Record（纯静态，无 mock 战绩）"""
     user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
     await update.message.reply_text(
-        render_track(),
+        with_status_bar(user, render_track()),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_menu_keyboard(user["status"]),
         disable_web_page_preview=True,
@@ -418,11 +578,12 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """💎 Upgrade Pro · Founding Pro"""
     user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
     await update.message.reply_text(
-        render_upgrade(),
+        with_status_bar(user, render_upgrade(user)),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_menu_keyboard(user["status"]),
         disable_web_page_preview=True,
     )
+
 
 
 
@@ -667,7 +828,7 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """📩 Daily Digest（免费看摘要，Pro 看完整）"""
     user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
     await update.message.reply_text(
-        render_digest(tier_of(user)),
+        with_status_bar(user, render_digest(tier_of(user))),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_menu_keyboard(user["status"]),
         disable_web_page_preview=True,
@@ -676,6 +837,7 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_smart_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     """查看当前追踪的聪明钱地址"""
     user_id = str(update.effective_user.id)
     user = upsert_user(user_id, update.effective_user.username or "")
@@ -825,9 +987,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "signals" or data == "signals_refresh" or data.startswith("signals_page:"):
         # Live Signals：首次打开 / 翻页 / 刷新（refresh 绕过缓存）
+        is_pro = tier_of(user) in ("paid", "trial")
         page = 0
         force = False
         if data.startswith("signals_page:"):
+            # Free 用户无翻页权限：阻止通过手动 callback 绕过限制
+            if not is_pro:
+                await query.answer("Full pagination is available on Pro.", show_alert=True)
+                return
             try:
                 page = max(0, int(data.split(":", 1)[1]))
             except ValueError:
@@ -839,15 +1006,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             res = {"text": REFRESH_FAIL_MSG, "has_prev": False, "has_next": False, "page": 0}
         await _safe_edit(
-            query, res["text"],
+            query, with_status_bar(user, res["text"]),
             paging_keyboard("signals", res["page"], res["has_prev"], res["has_next"]),
         )
 
     elif data in ("hot", "alpha") or data == "hot_refresh" or data.startswith("hot_page:"):
         # Hot Tokens：首次打开 / 翻页 / 刷新（refresh 绕过缓存）
+        is_pro = tier_of(user) in ("paid", "trial")
         page = 0
         force = False
         if data.startswith("hot_page:"):
+            # Free 用户无翻页权限：阻止通过手动 callback 绕过限制
+            if not is_pro:
+                await query.answer("Full pagination is available on Pro.", show_alert=True)
+                return
             try:
                 page = max(0, int(data.split(":", 1)[1]))
             except ValueError:
@@ -859,14 +1031,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             res = {"text": REFRESH_FAIL_MSG, "has_prev": False, "has_next": False, "page": 0}
         await _safe_edit(
-            query, res["text"],
+            query, with_status_bar(user, res["text"]),
             paging_keyboard("hot", res["page"], res["has_prev"], res["has_next"]),
         )
 
 
     elif data == "digest":
         await query.edit_message_text(
-            render_digest(tier_of(user)),
+            with_status_bar(user, render_digest(tier_of(user))),
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_menu_keyboard(user["status"]),
             disable_web_page_preview=True,
@@ -874,7 +1046,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "track":
         await query.edit_message_text(
-            render_track(),
+            with_status_bar(user, render_track()),
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_menu_keyboard(user["status"]),
             disable_web_page_preview=True,
@@ -882,11 +1054,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data in ("upgrade", "pay"):
         await query.edit_message_text(
-            render_upgrade(),
+            with_status_bar(user, render_upgrade(user)),
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_menu_keyboard(user["status"]),
             disable_web_page_preview=True,
         )
+
 
     elif data == "list":
         wallets = get_user_wallets(user_id)
