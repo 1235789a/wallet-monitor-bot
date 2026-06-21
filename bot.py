@@ -133,9 +133,10 @@ def render_status_bar(user: dict) -> str:
     # expired / free
     return (
         "🔒 *Status: Free Preview*\n"
-        "_Upgrade to Pro to unlock wallet labels, tx links, full lists, "
-        "and real-time smart money alerts._"
+        "_Upgrade to Pro to unlock the full Alpha Radar — Smart Money signals "
+        "when detected, wallet details, tx links, and full Hot Tokens._"
     )
+
 
 
 def with_status_bar(user: dict, body: str) -> str:
@@ -203,9 +204,20 @@ FREE_DIGEST_LOCK = (
 )
 # 公开 DEX 数据来源标注（诚实标注，绝不伪装成 smart money）
 FALLBACK_NOTE = (
-    "\n_Source: GeckoTerminal / DexScreener public DEX data._\n"
-    "_Smart money alerts will appear here when detected._"
+    "\n_Public DEX fallback data is not counted in Track Record._\n"
+    "_Smart Money signals will appear here when detected._"
 )
+
+# Live Alpha Radar fallback 头部：先诚实说明无 smart money，再标注 Early Radar
+ALPHA_RADAR_FALLBACK_HEAD = (
+    "🟢 Smart Money Signals\n"
+    "No confirmed smart wallet buys detected in the current window.\n\n"
+    "🟡 Early Radar\n"
+    "Showing public DEX activity while Smart Money signals are being collected.\n\n"
+    "Important:\n"
+    "Public DEX fallback data is not counted in Track Record.\n"
+)
+
 
 
 def render_signals_paged(tier: str, page: int = 0, force_refresh: bool = False) -> dict:
@@ -225,19 +237,19 @@ def render_signals_paged(tier: str, page: int = 0, force_refresh: bool = False) 
     except Exception:
         txs = []
 
-    # 有真实聪明钱信号 → 优先展示
+    # 有真实聪明钱信号 → 优先展示（🟢 Smart Money Signals，真实可计入 Track Record）
     if txs:
         per_page = SIGNALS_PER_PAGE if is_pro else 3
         shown = txs[:per_page]
         if is_pro:
-            lines = ["🚨 *Pro Signal View · Smart Money*\n"]
+            lines = ["🚨 *Live Alpha Radar*\n\n🟢 *Smart Money Signals*\n"]
             for tx in shown:
                 lines.append(format_smart_alert(tx, tier=tier))
                 lines.append("—" * 6)
             return {"text": "\n".join(lines), "has_prev": False,
                     "has_next": False, "page": 0}
         # Free：脱敏预览（format_smart_alert free 分支已去 label/tx/entry）
-        lines = ["🚨 *Public Market Preview · Signals*\n"]
+        lines = ["🚨 *Live Alpha Radar · Preview*\n\n🟢 *Smart Money Signals*\n"]
         for tx in shown:
             lines.append(format_smart_alert(tx, tier="free"))
             lines.append("—" * 6)
@@ -245,18 +257,20 @@ def render_signals_paged(tier: str, page: int = 0, force_refresh: bool = False) 
         return {"text": "\n".join(lines), "has_prev": False,
                 "has_next": False, "page": 0}
 
-    # 聪明钱为空 → 回退到真实公开 DEX 市场动向
+    # 聪明钱为空 → Live Alpha Radar fallback：明确分 🟢 Smart Money(空) + 🟡 Early Radar(公开DEX)
     if is_pro:
         pg = render_public_signals_page(page=page, per_page=SIGNALS_PER_PAGE,
                                         force_refresh=force_refresh)
         if pg["text"]:
-            base = f"🚨 *Pro Signal View*\n\n{pg['text']}{FALLBACK_NOTE}"
+            base = f"🚨 *Live Alpha Radar*\n\n{ALPHA_RADAR_FALLBACK_HEAD}\n{pg['text']}"
             return {"text": base, "has_prev": pg["has_prev"],
                     "has_next": pg["has_next"], "page": pg["page"]}
         base = (
-            "🚨 *Pro Signal View*\n\n"
-            "No signals available right now. New signals are pushed in real time as they appear."
-            f"{FALLBACK_NOTE}"
+            "🚨 *Live Alpha Radar*\n\n"
+            "🟢 Smart Money Signals\n"
+            "No confirmed smart wallet buys detected in the current window.\n\n"
+            "🟡 Early Radar\n"
+            "No public DEX activity available right now. Please try again later."
         )
         return {"text": base, "has_prev": False, "has_next": False, "page": 0}
 
@@ -264,15 +278,18 @@ def render_signals_paged(tier: str, page: int = 0, force_refresh: bool = False) 
     pg = render_public_signals_page(page=0, per_page=3,
                                     force_refresh=force_refresh)
     if pg["text"]:
-        base = f"🚨 *Public Market Preview*\n\n{pg['text']}{FALLBACK_NOTE}{FREE_SIGNALS_LOCK}"
+        base = (f"🚨 *Live Alpha Radar · Preview*\n\n"
+                f"{ALPHA_RADAR_FALLBACK_HEAD}\n{pg['text']}{FREE_SIGNALS_LOCK}")
         return {"text": base, "has_prev": False, "has_next": False, "page": 0}
 
     base = (
-        "🚨 *Public Market Preview*\n\n"
-        "No signals available right now."
+        "🚨 *Live Alpha Radar · Preview*\n\n"
+        "🟢 Smart Money Signals\n"
+        "No confirmed smart wallet buys detected in the current window."
         f"{FREE_SIGNALS_LOCK}"
     )
     return {"text": base, "has_prev": False, "has_next": False, "page": 0}
+
 
 
 
@@ -298,18 +315,25 @@ def render_hot_paged(tier: str, page: int = 0, force_refresh: bool = False) -> d
     except Exception:
         hot_tokens, leaderboard = [], []
 
-    # 聪明钱榜单为空 → 回退到真实公开 DEX 热门代币
+    # Hot Tokens Radar 副标题（统一）
+    radar_head = (
+        "🔥 *Hot Tokens Radar*\n"
+        "_Ranked by early activity, public DEX movement, and smart wallet "
+        "confirmation when available._\n"
+    )
+
+    # 聪明钱榜单为空 → 回退到真实公开 DEX 热门代币（每条已标注 🟡 Early Radar / Pending）
     if not hot_tokens:
         if is_pro:
             pg = render_public_hot_page(page=page, per_page=HOT_PER_PAGE,
                                         force_refresh=force_refresh)
             if pg["text"]:
-                base = f"{pg['text']}{FALLBACK_NOTE}"
+                base = f"{radar_head}\n{pg['text']}{FALLBACK_NOTE}"
                 return {"text": base, "has_prev": pg["has_prev"],
                         "has_next": pg["has_next"], "page": pg["page"]}
             base = (
-                "🔥 *Hot Tokens*\n\n"
-                "No data right now. The leaderboard appears once smart money becomes active."
+                f"{radar_head}\n"
+                "No data right now. Smart wallet confirmation appears once smart money becomes active."
                 f"{FALLBACK_NOTE}"
             )
             return {"text": base, "has_prev": False, "has_next": False, "page": 0}
@@ -317,24 +341,31 @@ def render_hot_paged(tier: str, page: int = 0, force_refresh: bool = False) -> d
         # Free：只给第一页 preview（最多 3 条），不翻页
         pg = render_public_hot_page(page=0, per_page=3, force_refresh=force_refresh)
         if pg["text"]:
-            head = "🔥 *Public Hot Tokens Preview*\n\n"
+            head = f"{radar_head} _(Preview)_\n\n"
             base = f"{head}{pg['text']}{FALLBACK_NOTE}{FREE_HOT_LOCK}"
             return {"text": base, "has_prev": False, "has_next": False, "page": 0}
         base = (
-            "🔥 *Public Hot Tokens Preview*\n\n"
+            f"{radar_head} _(Preview)_\n\n"
             "No data right now."
             f"{FREE_HOT_LOCK}"
         )
         return {"text": base, "has_prev": False, "has_next": False, "page": 0}
 
-    # 有真实聪明钱热度 → 单页呈现（保持现有 Free/Pro 分层）
+    # 有真实聪明钱热度 → 每条标注 🟢 Smart Money Signal / Confirmed
     top_n = HEAT_TOP_N if is_pro else 3
-    title = "🔥 *Hot Tokens · 24h Smart Money Heat*" if is_pro else "🔥 *Public Hot Tokens Preview*"
-    lines = [f"{title}\n"]
+    suffix = "" if is_pro else " _(Preview)_"
+    lines = [f"{radar_head}{suffix}\n"]
     for i, t in enumerate(hot_tokens[:top_n], 1):
         symbol = t["token_symbol"] or "?"
         ce = CHAINS.get(t.get("chain", "ethereum"), {}).get("emoji", "📊")
-        lines.append(f"  {i}. {ce} *{symbol}* — 🔥{t['heat_score']}")
+        lines.append(
+            f"{i}. {ce} *{symbol}* — 🔥{t['heat_score']}\n"
+            f"   Signal Level: 🟢 Smart Money Signal\n"
+            f"   Why it matters: Tracked smart wallet activity detected.\n"
+            f"   Source: Tracked smart wallet\n"
+            f"   Smart wallet confirmation: Confirmed"
+        )
+
 
     if is_pro:
         total_activity = sum(t["wallet_count"] for t in hot_tokens)
@@ -415,36 +446,52 @@ def render_digest(tier: str) -> str:
 
 
 def render_track() -> str:
-    """📊 Track Record：纯静态文案，零 mock 战绩。"""
+    """📊 Track Record：透明真实战绩页，零 mock 战绩，公开 DEX fallback 不计入。"""
     return (
         "📊 *Track Record*\n\n"
-        "We start tracking live signal performance from launch.\n\n"
-        "Every Pro signal will be logged and reviewed publicly:\n"
-        "• Signal time\n"
+        "We only track real Smart Money signals sent by this bot.\n\n"
+        "Public DEX fallback data is excluded.\n"
+        "No fake wins.\n"
+        "No cherry-picked results.\n\n"
+        "Current status:\n"
+        "Track record is being built.\n\n"
+        "Once enough real Smart Money signals are sent, this page will show:\n"
         "• Token\n"
+        "• Chain\n"
+        "• Signal time\n"
         "• Entry price\n"
         "• 6h move\n"
         "• 24h move\n"
-        "• Win or loss\n\n"
-        "No fake screenshots.\n"
-        "No cherry-picking.\n"
-        "Wins and losses will both be shown.\n\n"
-        "The goal is not to promise profits.\n"
-        "The goal is to surface early asymmetric opportunities before they become obvious.\n\n"
-        "Live record will appear after the first real signals are posted."
+        "• Wins and losses\n"
+        "• Full transparent history\n\n"
+        "This page will stay empty until real Smart Money signals exist."
     )
 
 
-# Pro 解锁清单（统一文案）
+
+# Pro 解锁清单（统一文案 · Founding Pro Alpha Radar）
 _PRO_UNLOCKS = (
     "Pro unlocks:\n"
-    "• Real-time smart money alerts\n"
-    "• Full wallet labels\n"
-    "• Tx links + entry prices\n"
-    "• Full hot tokens leaderboard\n"
-    "• Complete daily alpha digest\n"
-    "• Signal track record"
+    "• Full Alpha Radar\n"
+    "• More token opportunities\n"
+    "• Smart Money signals when detected\n"
+    "• Early Radar from public DEX activity\n"
+    "• Signal level labels\n"
+    "• Wallet details when Smart Money is available\n"
+    "• Transaction links when available\n"
+    "• Full Hot Tokens Radar\n"
+    "• Daily Digest\n"
+    "• Real Track Record as it builds"
 )
+
+# 透明声明（统一文案，所有付费页都带上，避免被指控伪造 alpha）
+_TRANSPARENCY = (
+    "Transparency:\n"
+    "We do not fake alpha.\n"
+    "Public DEX fallback data is clearly labeled.\n"
+    "Track Record only includes real Smart Money signals sent by this bot."
+)
+
 
 
 def _payment_instructions() -> str:
@@ -463,41 +510,52 @@ def _payment_instructions() -> str:
 
 def render_upgrade(user: dict | None = None) -> str:
     """
-    💎 Upgrade Pro，按用户状态分支：
+    💎 Founding Pro 销售页，按用户状态分支：
     - paid : 已是 Pro，不展示强付款文案
-    - trial: 提示试用剩余 + 续费引导 + 付款说明
-    - free / expired（或 user=None）: 完整收款页
+    - trial: 提示试用剩余 + Founding Pro 续费引导 + 透明声明
+    - free / expired（或 user=None）: 完整 Founding Pro 升级页
     """
     status = (user or {}).get("status")
 
     # 已付费：不再催付款
     if status == "paid":
         return (
-            "💎 *You are already Pro.*\n\n"
-            f"Valid until: *{_paid_until_str(user)}*\n\n"
-            "No payment needed right now.\n\n"
-            f"{_PRO_UNLOCKS}"
+            "✅ *You are already Pro.*\n\n"
+            "Your Founding Pro access is active.\n"
+            "You will continue receiving full Alpha Radar access."
         )
 
-    # 试用中：说明 trial = Pro，并引导续费
+    # 试用中：说明 trial = Pro，并引导 Founding Pro 续费
     if status == "trial":
         return (
-            "🟢 *You are on Pro Trial.*\n\n"
-            f"Trial ends in: *{_trial_time_left(user)}*\n\n"
-            "Keep Pro after trial:\n"
+            "💎 *Pro Trial Active*\n\n"
+            "Your Pro Trial is active.\n"
+            f"Time left: *{_trial_time_left(user)}*\n\n"
+            "You have full Alpha Radar access during trial.\n\n"
+            "Continue with Founding Pro:\n"
             f"*{PRICE_USDT:.0f} USDT / month*\n\n"
-            f"{_PRO_UNLOCKS}\n\n"
-            f"{_payment_instructions()}"
+            f"{_TRANSPARENCY}"
         )
 
-    # Free / expired / 未知：完整收款页
+    # Free / expired / 未知：完整 Founding Pro 升级页
     return (
-        "💎 *Upgrade to Pro*\n\n"
-        f"*{PRICE_USDT:.0f} USDT / month*\n"
-        f"Limited to the first {FOUNDING_USER_LIMIT} users.\n\n"
+        "💎 *Founding Pro*\n\n"
+        "An early alpha radar for on-chain traders.\n\n"
+        "Get early access to Whale Wallet Tracker Pro.\n\n"
+        "What it watches:\n"
+        "• Smart wallet activity\n"
+        "• Early DEX movers\n"
+        "• Unusual token volume\n"
+        "• Hot tokens before broader attention\n"
+        "• Real signal performance as track record builds\n\n"
         f"{_PRO_UNLOCKS}\n\n"
+        "Founding price:\n"
+        f"*{PRICE_USDT:.0f} USDT / month*\n"
+        "_For early founding users._\n\n"
+        f"{_TRANSPARENCY}\n\n"
         f"{_payment_instructions()}"
     )
+
 
 
 
@@ -514,14 +572,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     welcome = (
         "🐋 *Whale Wallet Tracker*\n\n"
-        "Smart money buys before the crowd notices.\n\n"
-        "We track high-signal wallets and surface early on-chain moves "
-        "before they become obvious.\n\n"
-        "Free users get delayed previews.\n"
-        "Pro users get real-time smart money alerts, wallet labels, tx links, "
-        "entry prices, and daily alpha digest.\n\n"
+        "An early alpha radar for on-chain traders.\n\n"
+        "We track smart wallets, early DEX movers, unusual token volume, "
+        "and hot tokens before broader attention.\n\n"
+        "Smart Money signals show when detected. When none are confirmed, "
+        "we show Early Radar from public DEX activity — always clearly labeled.\n\n"
+        "Free users get a limited preview.\n"
+        "Pro users unlock the full Alpha Radar.\n\n"
         "Choose an option below."
     )
+
 
     await update.message.reply_text(
         with_status_bar(user_data, welcome),

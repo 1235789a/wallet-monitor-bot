@@ -75,6 +75,26 @@ def _safe_float(v, default=0.0):
         return default
 
 
+def _esc(text) -> str:
+    """
+    Legacy Telegram Markdown 转义：对动态字段（token symbol / source / label）
+    里可能出现的 markdown 控制字符做转义，避免 parse error。
+    仅处理 legacy Markdown 敏感字符：_ * ` [
+    """
+    s = str(text or "")
+    for ch in ("\\", "_", "*", "`", "["):
+        s = s.replace(ch, "\\" + ch)
+    return s
+
+
+def _reason_for_source(src: str) -> str:
+    """根据 fallback 数据源给出诚实的 'why it matters' 文案。"""
+    if src == "DexScreener":
+        return "Trending on public DEX data."
+    return "Unusual public DEX activity detected."
+
+
+
 # ============================================================
 # GeckoTerminal（主数据源）
 # ============================================================
@@ -314,19 +334,25 @@ def render_public_hot_page(page: int = 0, per_page: int = 5,
     start = page * per_page
     chunk = tokens[start:start + per_page]
 
-    lines = ["🔥 *Trending Tokens · Live DEX Heat*\n"]
+    # Hot Tokens Radar fallback：每条标注 Signal Level / Source / confirmation。
+    # 公开 DEX 数据一律 🟡 Early Radar + confirmation Pending，绝不伪装成 Smart Money。
+    lines = []
     for i, t in enumerate(chunk, start + 1):
         ce = _CHAIN_EMOJI.get(t["chain"], "📊")
         chg = t.get("change_24h", 0)
         arrow = "🟢" if chg >= 0 else "🔴"
+        sym = _esc(t["symbol"])
+        src = _esc(t.get("source", "GeckoTerminal"))
         lines.append(
-            f"  {i}. {ce} *{t['symbol']}* — {_fmt_price(t['price_usd'])} "
-            f"{arrow}{chg:+.1f}% | Vol {_fmt_vol(t['volume_24h'])}"
+            f"{i}. {ce} *{sym}* — {_fmt_price(t['price_usd'])} "
+            f"{arrow}{chg:+.1f}% | Vol {_fmt_vol(t['volume_24h'])}\n"
+            f"   Signal Level: 🟡 Early Radar\n"
+            f"   Why it matters: {_reason_for_source(t.get('source', ''))}\n"
+            f"   Source: {src} public DEX data\n"
+            f"   Smart wallet confirmation: Pending"
         )
 
-    src = chunk[0].get("source", "GeckoTerminal")
-    lines.append(f"\n_Source: {src} public DEX data (live)_")
-    lines.append(f"_Page {page + 1}/{total_pages}_")
+    lines.append(f"\n_Page {page + 1}/{total_pages}_")
 
     return {
         "text": "\n".join(lines),
@@ -335,6 +361,7 @@ def render_public_hot_page(page: int = 0, per_page: int = 5,
         "page": page,
         "total_pages": total_pages,
     }
+
 
 
 def render_public_signals_page(page: int = 0, per_page: int = 5,
@@ -358,19 +385,24 @@ def render_public_signals_page(page: int = 0, per_page: int = 5,
     start = page * per_page
     chunk = movers[start:start + per_page]
 
-    lines = ["🚨 *Market Signals · Live DEX Movers*\n"]
+    # Early Radar fallback：每条 DEX mover 明确标注为 🟡 Early Radar + confirmation Pending，
+    # 绝不写成 "Smart Money bought / Whale bought"，公开数据不计入 Track Record。
+    lines = []
     for t in chunk:
         ce = _CHAIN_EMOJI.get(t["chain"], "📊")
         chg = t.get("change_24h", 0)
         arrow = "🟢" if chg >= 0 else "🔴"
+        sym = _esc(t["symbol"])
+        src = _esc(t.get("source", "GeckoTerminal"))
         lines.append(
-            f"{ce} *{t['symbol']}* {arrow} {chg:+.1f}% (24h) "
-            f"| {_fmt_price(t['price_usd'])} | Vol {_fmt_vol(t['volume_24h'])}"
+            f"{ce} *{sym}* {arrow} {chg:+.1f}% (24h) "
+            f"| {_fmt_price(t['price_usd'])} | Vol {_fmt_vol(t['volume_24h'])}\n"
+            f"   Signal Level: 🟡 Early Radar\n"
+            f"   Source: {src} public DEX data\n"
+            f"   Smart wallet confirmation: Pending"
         )
 
-    src = chunk[0].get("source", "GeckoTerminal")
-    lines.append(f"\n_Source: {src} public DEX data (live)_")
-    lines.append(f"_Page {page + 1}/{total_pages}_")
+    lines.append(f"\n_Page {page + 1}/{total_pages}_")
 
     return {
         "text": "\n".join(lines),
@@ -379,6 +411,7 @@ def render_public_signals_page(page: int = 0, per_page: int = 5,
         "page": page,
         "total_pages": total_pages,
     }
+
 
 
 def render_public_hot(limit: int = 8) -> str:
