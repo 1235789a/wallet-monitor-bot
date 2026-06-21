@@ -539,13 +539,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """🚨 Live Signals（分页）"""
     user = upsert_user(str(update.effective_user.id), update.effective_user.username or "")
+    # signals 需扫描链上聪明钱 + 回退公开 DEX，耗时较长：先发加载占位，渲染完再就地替换
+    loading = await update.message.reply_text(
+        "🚨 Loading live signals...\n\nScanning smart money & market data, please wait...",
+        disable_web_page_preview=True,
+    )
     res = render_signals_paged(tier_of(user), page=0)
-    await update.message.reply_text(
+    await loading.edit_text(
         with_status_bar(user, res["text"]),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=paging_keyboard("signals", res["page"], res["has_prev"], res["has_next"]),
         disable_web_page_preview=True,
     )
+
 
 
 
@@ -1001,6 +1007,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 page = 0
         elif data == "signals_refresh":
             force = True
+        # signals 渲染要扫链 + 拉公开 DEX，耗时较长：首次打开时先就地显示加载占位
+        if data == "signals":
+            await _safe_edit(
+                query,
+                "🚨 Loading live signals...\n\nScanning smart money & market data, please wait...",
+            )
         try:
             res = render_signals_paged(tier_of(user), page=page, force_refresh=force)
         except Exception:
@@ -1009,6 +1021,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             query, with_status_bar(user, res["text"]),
             paging_keyboard("signals", res["page"], res["has_prev"], res["has_next"]),
         )
+
 
     elif data in ("hot", "alpha") or data == "hot_refresh" or data.startswith("hot_page:"):
         # Hot Tokens：首次打开 / 翻页 / 刷新（refresh 绕过缓存）
