@@ -15,7 +15,7 @@ Google, Bing, SEO result pages, and AI search are diagnostic sources only. Every
 - `distribution_gap`
 - one matching `discovery` evidence entry
 
-Search-only discovery channels are rejected, and the discovery source must be public and on a different domain from the company website.
+Search-only discovery channels are rejected, and the discovery source must be public and on a different domain from the company website. The full hard gate and quarantine behavior are documented in [system/off-search-discovery-policy.md](system/off-search-discovery-policy.md).
 
 ## Current P0 rules
 
@@ -42,6 +42,7 @@ The runner accepts `--db` and `--vault` overrides. The database, Obsidian vault,
 - `workflow1_daily.py`: validation, scoring, dedupe, import and report generation.
 - `workflow1_source_audit.py` and `prospect_os/source_tools.py`: read-only source auditing.
 - `system/daily-task-prompt.md`: current operating prompt.
+- `system/off-search-discovery-policy.md`: mandatory discovery provenance and same-domain quarantine rules.
 - `system/source-audit-setup.md`: audit setup and limitations.
 - `test_workflow1_v2.py`: safe fixture tests, including rejection of search-only discovery.
 
