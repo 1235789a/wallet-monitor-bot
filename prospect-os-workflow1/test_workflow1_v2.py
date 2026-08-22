@@ -27,6 +27,12 @@ def demo_candidate(index: int) -> dict:
             "source_url": f"https://www.producthunt.com/posts/safe-demo-{index:02d}",
         },
         {
+            "category": "ownership_locations",
+            "label": "observed",
+            "claim": "The public business profile identifies an owner-operated company with one location and no franchise or chain affiliation.",
+            "source_url": f"{base_url}/about",
+        },
+        {
             "category": "recent_activity",
             "label": "observed",
             "claim": "Published a current fintech product delivery update.",
@@ -124,6 +130,11 @@ def demo_candidate(index: int) -> dict:
         "discovery_source_note": "Found from a Product Hunt launch listing; the independent website was verified afterwards.",
         "business_quality": "strong",
         "distribution_gap": "strong",
+        "ownership_model": "owner_operated",
+        "location_count": 1,
+        "chain_status": "no",
+        "ownership_location_evidence_url": f"{base_url}/about",
+        "ownership_location_evidence_note": "The owner profile and location page show one independently operated location.",
         "tags": ["safe-test"],
         "decision_maker_name": f"Demo Founder {index:02d}",
         "decision_maker_role": "Founder",
@@ -145,20 +156,13 @@ def demo_candidate(index: int) -> dict:
 
 class Workflow1V2EndToEndTest(unittest.TestCase):
     def test_full_safe_batch_on_database_copy(self) -> None:
-        with closing(sqlite3.connect(workflow.DEFAULT_DB)) as production:
-            production_count_before = production.execute(
-                "SELECT COUNT(*) FROM companies"
-            ).fetchone()[0]
         with tempfile.TemporaryDirectory(prefix="prospect-os-v2-") as temp_name:
             root = Path(temp_name)
             copied_db = root / "prospects-test.db"
             source = root / "safe-candidates.json"
             vault = root / "vault"
-            with closing(sqlite3.connect(
-                f"file:{workflow.DEFAULT_DB.as_posix()}?mode=ro", uri=True
-            )) as original:
-                with closing(sqlite3.connect(copied_db)) as copied:
-                    original.backup(copied)
+            with closing(sqlite3.connect(copied_db)) as copied:
+                workflow.ensure_v2_schema(copied)
             source.write_text(
                 json.dumps([demo_candidate(i) for i in range(1, 7)], ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -193,11 +197,6 @@ class Workflow1V2EndToEndTest(unittest.TestCase):
                     "SELECT decision_maker_status, auto_reply_status FROM partnership_assessments WHERE decision_maker_name='Demo Founder 01'"
                 ).fetchone()
                 self.assertEqual(statuses, ("confirmed", "unknown"))
-        with closing(sqlite3.connect(workflow.DEFAULT_DB)) as production:
-            production_count_after = production.execute(
-                "SELECT COUNT(*) FROM companies"
-            ).fetchone()[0]
-        self.assertEqual(production_count_before, production_count_after)
 
     def test_reply_behaviour_statuses_cap_and_block_p0(self) -> None:
         candidate = demo_candidate(20)
@@ -229,14 +228,28 @@ class Workflow1V2EndToEndTest(unittest.TestCase):
             root = Path(temp_name)
             copied_db = root / "prospects-test.db"
             source = root / "search-only.json"
-            with closing(sqlite3.connect(
-                f"file:{workflow.DEFAULT_DB.as_posix()}?mode=ro", uri=True
-            )) as original:
-                with closing(sqlite3.connect(copied_db)) as copied:
-                    original.backup(copied)
+            with closing(sqlite3.connect(copied_db)) as copied:
+                workflow.ensure_v2_schema(copied)
             source.write_text(json.dumps([candidate]), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "search-only discovery channel"):
                 workflow.execute(source, RUN_DAY, copied_db, root / "vault", dry_run=True)
+
+    def test_chain_or_three_locations_is_hard_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="prospect-os-no-chain-") as temp_name:
+            root = Path(temp_name)
+            db = root / "prospects-test.db"
+            with closing(sqlite3.connect(db)) as conn:
+                workflow.ensure_v2_schema(conn)
+            for field, value, message in (
+                ("chain_status", "yes", "chains, franchises"),
+                ("location_count", 3, "only businesses with 1-2 locations"),
+            ):
+                candidate = demo_candidate(40)
+                candidate[field] = value
+                source = root / f"{field}.json"
+                source.write_text(json.dumps([candidate]), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, message):
+                    workflow.execute(source, RUN_DAY, db, root / "vault", dry_run=True)
 
 
 if __name__ == "__main__":

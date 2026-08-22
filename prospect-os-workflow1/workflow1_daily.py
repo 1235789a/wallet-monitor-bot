@@ -24,6 +24,9 @@ HANDMADE_TARGET = 0
 ACTIVE_SPRINT_POOL = "P0"
 P0_MAX_ACTIVITY_DAYS = 3  # one controlled relaxation from the former 48-hour window
 P0_MAX_SIZE_UPPER = 40  # exactly 2x the former conservative 20-person ceiling
+MAX_BUSINESS_LOCATIONS = 2
+INDEPENDENT_OWNERSHIP_MODELS = {"owner_operated", "independent_small_business"}
+CHAIN_STATUSES = {"no", "yes", "unknown"}
 DIRECT_CONTACT_TYPES = {
     "person", "founder", "business_account", "business_whatsapp",
     "support", "support_bot", "sales",
@@ -59,6 +62,7 @@ REPLY_BEHAVIOR_STATUS_ALIASES = {
     "inaccessible/private": "inaccessible",
 }
 DISCOVERY_CHANNELS = {
+    "company_registry", "official_business_directory", "chamber_directory",
     "industry_directory", "vertical_directory", "marketplace", "launch_platform",
     "industry_association", "trade_show", "startup_database", "map_local",
     "social", "community", "forum", "github", "ecosystem_directory",
@@ -68,6 +72,10 @@ SEARCH_ONLY_DISCOVERY_CHANNELS = {
     "google", "bing", "search", "search_engine", "seo_results", "ai_search",
 }
 DISCOVERY_CHANNEL_ALIASES = {
+    "company registry": "company_registry",
+    "official business directory": "official_business_directory",
+    "chamber directory": "chamber_directory",
+    "chamber of commerce": "chamber_directory",
     "industry directory": "industry_directory",
     "vertical directory": "vertical_directory",
     "marketplace": "marketplace",
@@ -121,6 +129,7 @@ SCORE_LIMITS = {
 }
 REQUIRED_EVIDENCE_CATEGORIES = {
     "discovery",
+    "ownership_locations",
     "recent_activity",
     "reply_behavior",
     "contact_openness",
@@ -161,8 +170,130 @@ def now_iso() -> str:
     return datetime.now(SHANGHAI).isoformat(timespec="seconds")
 
 
+def ensure_base_schema(conn: sqlite3.Connection) -> None:
+    """Create the portable Workflow 1 base schema without replacing existing data."""
+    with conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS companies (
+                company_id TEXT PRIMARY KEY,
+                company_name TEXT NOT NULL,
+                canonical_domain TEXT NOT NULL UNIQUE,
+                website_url TEXT NOT NULL,
+                country TEXT NOT NULL,
+                track TEXT NOT NULL,
+                industry TEXT NOT NULL,
+                business_summary TEXT NOT NULL,
+                company_size_estimate TEXT NOT NULL,
+                size_confidence TEXT NOT NULL,
+                activity_signal TEXT NOT NULL,
+                public_crypto_signal TEXT NOT NULL DEFAULT '',
+                crypto_signal_source_url TEXT NOT NULL DEFAULT '',
+                verified_facts_json TEXT NOT NULL DEFAULT '[]',
+                cautious_inference TEXT NOT NULL DEFAULT '',
+                personalization_hook TEXT NOT NULL DEFAULT '',
+                fit_level TEXT NOT NULL DEFAULT 'P3',
+                fit_reason TEXT NOT NULL DEFAULT '',
+                source_urls_json TEXT NOT NULL DEFAULT '[]',
+                outreach_message TEXT NOT NULL DEFAULT '',
+                outreach_quality_json TEXT NOT NULL DEFAULT '{}',
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                times_found INTEGER NOT NULL DEFAULT 1,
+                stage TEXT NOT NULL DEFAULT 'discovered',
+                do_not_contact INTEGER NOT NULL DEFAULT 0,
+                last_contacted_at TEXT,
+                next_follow_up_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS contacts (
+                contact_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                channel TEXT NOT NULL,
+                raw_value TEXT NOT NULL,
+                normalized_value TEXT NOT NULL,
+                clickable_url TEXT NOT NULL,
+                contact_type TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                verified_at TEXT NOT NULL,
+                is_valid INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(channel, normalized_value)
+            );
+            CREATE TABLE IF NOT EXISTS evidence (
+                evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                evidence_type TEXT NOT NULL,
+                claim TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                verified_at TEXT NOT NULL,
+                is_verified_fact INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(company_id, evidence_type, claim, source_url)
+            );
+            CREATE TABLE IF NOT EXISTS daily_runs (
+                run_id TEXT PRIMARY KEY,
+                run_date TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                web3_target INTEGER NOT NULL DEFAULT 0,
+                handmade_target INTEGER NOT NULL DEFAULT 0,
+                web3_qualified INTEGER NOT NULL DEFAULT 0,
+                handmade_qualified INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                notes TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS daily_candidates (
+                candidate_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES daily_runs(run_id) ON DELETE CASCADE,
+                company_id TEXT REFERENCES companies(company_id) ON DELETE SET NULL,
+                candidate_name TEXT NOT NULL,
+                track TEXT NOT NULL,
+                disposition TEXT NOT NULL,
+                exclusion_reason TEXT NOT NULL DEFAULT '',
+                candidate_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS tags (
+                tag_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE IF NOT EXISTS company_tags (
+                company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                tag_id INTEGER NOT NULL REFERENCES tags(tag_id) ON DELETE CASCADE,
+                PRIMARY KEY(company_id, tag_id)
+            );
+            CREATE TABLE IF NOT EXISTS company_stage_history (
+                history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                from_stage TEXT,
+                to_stage TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                changed_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS dedupe_review_queue (
+                review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                existing_company_id TEXT,
+                candidate_name TEXT NOT NULL,
+                candidate_country TEXT NOT NULL DEFAULT '',
+                similarity_score REAL NOT NULL DEFAULT 0,
+                reason TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+
+
 def ensure_v2_schema(conn: sqlite3.Connection) -> None:
     """Add v2 storage without rewriting workflow 1's historical company records."""
+    ensure_base_schema(conn)
     evidence_columns = {
         row[1] for row in conn.execute("PRAGMA table_info(evidence)")
     }
@@ -213,6 +344,10 @@ def ensure_v2_schema(conn: sqlite3.Connection) -> None:
                 assessment_source_urls_json TEXT NOT NULL,
                 decision_maker_status TEXT NOT NULL DEFAULT 'unknown',
                 auto_reply_status TEXT NOT NULL DEFAULT 'unknown',
+                ownership_model TEXT NOT NULL DEFAULT 'unknown',
+                location_count INTEGER NOT NULL DEFAULT 0,
+                chain_status TEXT NOT NULL DEFAULT 'unknown',
+                ownership_location_evidence TEXT NOT NULL DEFAULT 'Unknown',
                 assessed_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -261,6 +396,22 @@ def ensure_v2_schema(conn: sqlite3.Connection) -> None:
         if "auto_reply_status" not in assessment_columns:
             conn.execute(
                 "ALTER TABLE partnership_assessments ADD COLUMN auto_reply_status TEXT NOT NULL DEFAULT 'unknown'"
+            )
+        if "ownership_model" not in assessment_columns:
+            conn.execute(
+                "ALTER TABLE partnership_assessments ADD COLUMN ownership_model TEXT NOT NULL DEFAULT 'unknown'"
+            )
+        if "location_count" not in assessment_columns:
+            conn.execute(
+                "ALTER TABLE partnership_assessments ADD COLUMN location_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "chain_status" not in assessment_columns:
+            conn.execute(
+                "ALTER TABLE partnership_assessments ADD COLUMN chain_status TEXT NOT NULL DEFAULT 'unknown'"
+            )
+        if "ownership_location_evidence" not in assessment_columns:
+            conn.execute(
+                "ALTER TABLE partnership_assessments ADD COLUMN ownership_location_evidence TEXT NOT NULL DEFAULT 'Unknown'"
             )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_assessments_sprint_tier "
@@ -450,6 +601,20 @@ def company_size_upper_bound(value: str) -> int:
     return max(numbers)
 
 
+def independent_business_gate(item: dict[str, Any]) -> bool:
+    """Return True only for a verified non-chain business with one or two locations."""
+    try:
+        location_count = int(item.get("location_count", 0))
+    except (TypeError, ValueError):
+        return False
+    return (
+        str(item.get("chain_status", "unknown")).strip().lower() == "no"
+        and str(item.get("ownership_model", "unknown")).strip().lower()
+        in INDEPENDENT_OWNERSHIP_MODELS
+        and 1 <= location_count <= MAX_BUSINESS_LOCATIONS
+    )
+
+
 def strongest_evidence_label(
     evidence: list[dict[str, Any]], category: str
 ) -> str:
@@ -533,7 +698,10 @@ def assign_sprint_tier(
         (observed_reply, explicit_partner, confirmed_usdt, founder_direct, public_dm_invite)
     )
     core_ok = (
-        recent_label == "observed"
+        independent_business_gate(item)
+        and strongest_evidence_label(evidence, "ownership_locations")
+        in {"observed", "self_reported"}
+        and recent_label == "observed"
         and client_label in {"observed", "self_reported"}
         and str(item["geo_maturity"]).strip().lower() != "mature"
         and str(item["outsourcing_status"]).strip().lower() != "closed"
@@ -567,7 +735,7 @@ def assign_sprint_tier(
     p2 = core_ok and activity_age <= 30 and scores["geo_gap"] >= 10
     if p0:
         tier = "P0"
-        why = "3天内活跃、最多40人的小型团队，公开回复行为已观察，且联系方式确认属于决策人。"
+        why = "已核验为非连锁、仅1–2个经营地点且老板可直接做主；同时满足3天内活跃、公开回复已观察和决策人直达。"
     elif p1:
         tier = "P1"
         why = "核心条件和多项强信号已验证，但活动时效或小团队条件未达到P0。"
@@ -639,6 +807,8 @@ def validate_candidates(
         "geo_maturity", "outsourcing_status", "usdt_status", "first_message",
         "discovery_channel", "discovery_source_url", "discovery_source_note",
         "business_quality", "distribution_gap",
+        "ownership_model", "location_count", "chain_status",
+        "ownership_location_evidence_url", "ownership_location_evidence_note",
     }
 
     for index, raw in enumerate(rows, 1):
@@ -679,6 +849,30 @@ def validate_candidates(
             )
         if len(discovery_source_note) < 12:
             errors.append(f"{name}: discovery_source_note must explain how the company was found")
+
+        ownership_model = str(item.get("ownership_model", "")).strip().lower()
+        chain_status = str(item.get("chain_status", "")).strip().lower()
+        location_count = item.get("location_count")
+        ownership_evidence_url = str(item.get("ownership_location_evidence_url", "")).strip()
+        ownership_evidence_note = str(item.get("ownership_location_evidence_note", "")).strip()
+        if ownership_model not in INDEPENDENT_OWNERSHIP_MODELS:
+            errors.append(
+                f"{name}: ownership_model must confirm an owner-operated or independent small business"
+            )
+        if chain_status not in CHAIN_STATUSES:
+            errors.append(f"{name}: chain_status must be no, yes or unknown")
+        elif chain_status != "no":
+            errors.append(f"{name}: chains, franchises and unverified chain status are hard exclusions")
+        if not isinstance(location_count, int) or isinstance(location_count, bool):
+            errors.append(f"{name}: location_count must be a verified integer")
+        elif not 1 <= location_count <= MAX_BUSINESS_LOCATIONS:
+            errors.append(
+                f"{name}: only businesses with 1-{MAX_BUSINESS_LOCATIONS} locations are accepted"
+            )
+        if not public_url(ownership_evidence_url):
+            errors.append(f"{name}: ownership/location evidence requires a public URL")
+        if len(ownership_evidence_note) < 12:
+            errors.append(f"{name}: ownership/location evidence note is too weak")
 
         business_quality = str(item.get("business_quality", "")).strip().lower()
         distribution_gap = str(item.get("distribution_gap", "")).strip().lower()
@@ -783,6 +977,23 @@ def validate_candidates(
         ):
             errors.append(
                 f"{name}: discovery evidence source must match discovery_source_url"
+            )
+        ownership_evidence = [
+            entry for entry in valid_evidence
+            if entry["category"] == "ownership_locations"
+            and entry["label"] in {"observed", "self_reported"}
+        ]
+        if not ownership_evidence:
+            errors.append(
+                f"{name}: non-chain ownership and 1-2 locations require observed or self-reported evidence"
+            )
+        elif not any(
+            entry["source_url"].rstrip("/").casefold()
+            == ownership_evidence_url.rstrip("/").casefold()
+            for entry in ownership_evidence
+        ):
+            errors.append(
+                f"{name}: ownership/location evidence source must match ownership_location_evidence_url"
             )
 
         breakdown = item["score_breakdown"]
@@ -948,7 +1159,10 @@ def validate_candidates(
 
         all_source_urls = list(dict.fromkeys(
             [str(url) for url in sources]
-            + [str(item["contact_source_url"]), str(item["decision_maker_source_url"])]
+            + [
+                str(item["contact_source_url"]), str(item["decision_maker_source_url"]),
+                ownership_evidence_url,
+            ]
             + [entry["source_url"] for entry in valid_evidence if entry["source_url"]]
         ))
         clean_scores["reply_score_raw"] = reply_score_raw
@@ -967,6 +1181,11 @@ def validate_candidates(
             "discovery_source_note": discovery_source_note,
             "business_quality": business_quality,
             "distribution_gap": distribution_gap,
+            "ownership_model": ownership_model,
+            "location_count": location_count,
+            "chain_status": chain_status,
+            "ownership_location_evidence_url": ownership_evidence_url,
+            "ownership_location_evidence_note": ownership_evidence_note,
             "normalized_contact": contact,
             "contact_channel": str(item["contact_channel"]).lower(),
             "contact_type": str(item["contact_type"]).lower(),
@@ -999,7 +1218,10 @@ def validate_candidates(
             "outreach_message": message,
             "stage": "ready",
             "tags": list(dict.fromkeys(
-                ["prompt-v3", "prompt-v4-off-search", "p0-3d-sprint", "web3-geo", "off-search-discovery"]
+                [
+                    "prompt-v3", "prompt-v4-off-search", "p0-3d-sprint", "web3-geo",
+                    "off-search-discovery", "owner-operated", "no-chain", "max-two-locations",
+                ]
                 + [str(x).strip() for x in item.get("tags", []) if str(x).strip()]
             )),
             "outreach_quality": {
@@ -1258,10 +1480,12 @@ def insert_run(
                     qualification_questions_json, assessment_source_urls_json,
                     assessed_at, created_at, updated_at,
                     sprint_tier, evidence_certainty, sprint_rank_key_json,
-                    decision_maker_status, auto_reply_status
+                    decision_maker_status, auto_reply_status,
+                    ownership_model, location_count, chain_status,
+                    ownership_location_evidence
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -1288,6 +1512,8 @@ def insert_run(
                     item["sprint_tier"], item["evidence_certainty"],
                     json.dumps(item["sprint_rank_key"], ensure_ascii=False),
                     item["decision_maker_status"], item["auto_reply_status"],
+                    item["ownership_model"], item["location_count"], item["chain_status"],
+                    evidence_text(item["research_evidence"], "ownership_locations"),
                 ),
             )
             for tag in item["tags"]:
@@ -1367,6 +1593,9 @@ discovery_channel: {yaml_quote(item['discovery_channel'])}
 discovery_source: {yaml_quote(item['discovery_source_url'])}
 business_quality: {yaml_quote(item['business_quality'])}
 distribution_gap: {yaml_quote(item['distribution_gap'])}
+ownership_model: {yaml_quote(item['ownership_model'])}
+location_count: {item['location_count']}
+chain_status: {yaml_quote(item['chain_status'])}
 fit_level: {yaml_quote(item['sprint_tier'])}
 raw_total: {item['raw_total']}
 sprint_tier: {yaml_quote(item['sprint_tier'])}
@@ -1405,6 +1634,13 @@ tags: {tag_json}
 ## 公司简介
 
 {item['business_summary']}
+
+## 独立小商家硬门槛
+
+- 所有权：{item['ownership_model']}
+- 经营地点：{item['location_count']}（硬上限：{MAX_BUSINESS_LOCATIONS}）
+- 连锁/加盟：{item['chain_status']}
+- 核验证据：[{item['ownership_location_evidence_note']}]({item['ownership_location_evidence_url']})
 
 ## 发现链路与搜索诊断
 
@@ -1526,7 +1762,8 @@ def render_outputs(
     headers = [
         "排名", "冲刺池", "证据确定性", "分层理由", "company_id", "决策人/公司", "角色",
         "联系人身份", "联系方式类型", "是否决策人", "是否自动回复",
-        "企业规模", "最近活动", "国家", "主要业务", "官网",
+        "企业规模", "所有权", "经营地点数", "是否连锁", "门店与所有权证据",
+        "最近活动", "国家", "主要业务", "官网",
         "发现渠道", "发现来源", "业务质量", "搜索分发缺口",
         "近期活动证据", "Reply Behaviour状态", "公开回复行为", "联系开放度", "客户证据",
         "USDT状态", "USDT证据", "GEO成熟度", "合作证据",
@@ -1547,6 +1784,8 @@ def render_outputs(
                     display_status(item["decision_maker_status"]),
                     display_status(item["auto_reply_status"]),
                     item["company_size_estimate"],
+                    item["ownership_model"], item["location_count"], item["chain_status"],
+                    item["ownership_location_evidence_url"],
                     item["recent_activity_at"], item["country"], item["industry"],
                     item["website_url"],
                     item["discovery_channel"], item["discovery_source_url"],
@@ -1648,7 +1887,8 @@ generated_at: "{stamp}"
 
 ## 1. 执行摘要
 
-- 当前模式：只输出 🔥 P0 — 3-Day Controlled Sprint，不设数量目标，不为凑数降标准。
+- 当前模式：只输出 🔥 P0 — 3-Day Controlled Sprint；先发现公司，再逐家评价，不从搜索结果直接捞候选。
+- 独立商家硬门槛：只保留owner-operated/independent small business、1–2个经营地点、明确非连锁非加盟；`Unknown`不放行。
 - 本轮P0：{len(ordered)}家Web3；WhatsApp {sum(x['contact_channel'] == 'whatsapp' for x in ordered)}家；Telegram {sum(x['contact_channel'] == 'telegram' for x in ordered)}家。
 - 排序优先级：回复概率 → 决策人概率 → 真实业务价值 → 合作开放度 → GEO相关性；活动新鲜度用于门槛和同分排序。
 - 发现顺序：非搜索渠道发现 → 验证独立官网与真实业务 → 最后用搜索检查分发缺口；Google、Bing、AI Search只做诊断，不做主要发现源。
@@ -1658,7 +1898,7 @@ generated_at: "{stamp}"
 - 人工审核队列当前未解决：{review_count}。
 
 > [!success] P0硬门槛已满足
-> 仅保留3天内活跃、最多40人团队、业务质量Strong、搜索分发缺口Strong/Moderate、公开回复行为为Observed、且联系方式确认属于决策人的对象；客服/机器人/明确自动回复路径不占用P0名额。
+> 仅保留已核验为个人可做主、1–2个经营地点且非连锁/非加盟的商家；同时要求3天内活跃、业务质量Strong、搜索分发缺口Strong/Moderate、公开回复行为为Observed，且联系方式确认属于决策人。
 
 ## 2. 🔥 P0 — 3-Day Controlled Sprint
 
@@ -1686,6 +1926,7 @@ generated_at: "{stamp}"
 ## 5. 数据质量提醒
 
 - 每家均保存来源页、可点击联系方式、决策人身份、证据标签和完整评分明细。
+- 每家必须保存所有权、经营地点数和非连锁证据；3家及以上、连锁、加盟或状态Unknown一律排除。
 - Telegram本批次最多3家并维持质量门槛；其他情况下优先WhatsApp。
 - 每家必须保留发现渠道、发现来源、业务质量和搜索分发缺口；发现来源不能等同于客户官网。
 - 先看业务质量和活跃度，再看SEO/GEO；搜索诊断不能反过来成为客户发现方式。
