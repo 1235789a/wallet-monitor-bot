@@ -10,12 +10,15 @@
 - 数值总分不得覆盖硬排除，也不得让回复或USDT优势补偿活动、团队规模、资源匹配三项的明显不足。
 - SQLite是唯一真实数据源，同时保留Obsidian卡片、日报、CSV、证据、历史互动与去重身份。
 - 搜索偏差防护：必须先从非搜索排名渠道发现公司，再验证独立官网和真实业务，最后才用Google/Bing/AI Search诊断SEO/GEO缺口；搜索引擎不能作为主要发现源。
+- 独立商家硬门槛：只研究个人/老板能直接做主的独立小商家；必须核验为非连锁、非加盟且只有1–2个经营地点。3家及以上、连锁、加盟或门店数Unknown一律排除。
 
 ## 发现顺序（强制）
 
-`非搜索渠道发现 → 验证独立官网 → 验证真实业务与活跃度 → 检查决策人与联系方式 → 最后诊断搜索分发 → 评分`
+`从公司注册表/商会/垂直名录先发现公司 → 逐家公司核验所有权与经营地点 → 验证独立官网 → 验证真实业务与活跃度 → 检查老板/决策人与联系方式 → 最后诊断搜索分发 → 评分`
 
 允许的首发发现渠道包括行业/垂直目录、Marketplace、Product Hunt等发布平台、行业协会/展会名单、创业数据库、地图/本地商业库、Facebook/LinkedIn/X/Instagram、社区/论坛、GitHub/生态目录和官方合作伙伴目录。候选记录必须填写 `discovery_channel`、`discovery_source_url`、`discovery_source_note`，并保存一条 `discovery` 证据。`discovery_source_url` 不能与客户官网同域。
+
+本轮优先使用公司注册表、官方商业目录、商会名录和垂直商家名录建立原始公司池。不得直接用Google/Bing搜索结果页搜“最好的店”“附近商家”并把结果当候选。每家公司必须单独填写 `ownership_model`、`location_count`、`chain_status`、`ownership_location_evidence_url`、`ownership_location_evidence_note`，并保存一条 `ownership_locations` 证据。
 
 禁止把 `google`、`bing`、`search_engine`、`seo_results` 或 `ai_search` 写成发现渠道；这些工具只能记录为最后阶段的诊断证据。
 
@@ -43,6 +46,7 @@
 - 业务质量为 `strong`，且通过非搜索渠道先发现；
 - 搜索分发缺口为 `strong` 或 `moderate`，并附最后阶段的诊断证据；
 - 个人、自由职业者、创始人、老板或创始人主导的小团队，最多40人；
+- 所有权必须为 `owner_operated` 或 `independent_small_business`，`chain_status=no`，且 `location_count` 只能为1或2；
 - 决策人可以通过公开WhatsApp或Telegram直接触达；WhatsApp优先，本次大搜Telegram最多3个；
 - Reply Behaviour必须为 `Observed`，联系人必须确认是决策人；Not found最高12/30，Inaccessible只能按活跃度、联系方式和账号真实性估算，均不得进入P0；
 - 与Web3相关或有清晰加密兼容能力；
@@ -70,10 +74,11 @@
 2. 成熟GEO/AEO/AI Search商业服务商；
 3. 明确拒绝合作、外包、推荐或外部交付；
 4. 明显过大、官僚化，无法直接接触小型合作决策人；
-5. 没有相关客户、业务、项目、社区或分发资源；
-6. 博彩、成人、烟草/电子烟、毒品、武器、欺诈、非法投资等高风险业务；
-7. 联系方式无效；
-8. 公司名、决策人、域名、WhatsApp、Telegram或社交身份与历史数据库重复。
+5. 连锁店、加盟店、品牌直营网点、3家及以上经营地点，或无法核验门店数/独立所有权；
+6. 没有相关客户、业务、项目、社区或分发资源；
+7. 博彩、成人、烟草/电子烟、毒品、武器、欺诈、非法投资等高风险业务；
+8. 联系方式无效；
+9. 公司名、决策人、域名、WhatsApp、Telegram或社交身份与历史数据库重复。
 
 ## 保留的五维辅助评分
 
@@ -105,6 +110,7 @@
 - Resource / GEO fit、Reply evidence、Partnership evidence；
 - USDT / crypto evidence、Evidence certainty；
 - 非搜索发现渠道、发现来源、业务质量、搜索分发缺口；
+- 所有权、经营地点数、非连锁证据；
 - 可点击WhatsApp / Telegram / Facebook；
 - Why this tier、Recommended first message。
 

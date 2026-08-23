@@ -112,6 +112,7 @@ def audit_candidate_rows(rows: list[dict[str, Any]], pause_seconds: float = 0.25
                 str(row.get("website_url", "")).strip(),
                 str(row.get("discovery_source_url", "")).strip(),
                 str(row.get("contact_source_url", "")).strip(),
+                str(row.get("ownership_location_evidence_url", "")).strip(),
             ]
             + [str(x).strip() for x in row.get("source_urls", [])]
         ))
