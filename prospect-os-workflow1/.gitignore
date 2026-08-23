@@ -1,0 +1,9 @@
+# Local Prospect OS state (never commit customer data or credentials)
+*.db
+*.sqlite
+*.sqlite3
+.env
+outputs/
+runs/
+vault/
+ProspectOS/
