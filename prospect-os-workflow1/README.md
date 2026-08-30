@@ -2,6 +2,10 @@
 
 This folder is a portable snapshot of the current Web3-only Prospect OS workflow. It is intentionally isolated from the host application's existing files.
 
+The lawful tobacco/alcohol prospect track is a separate, evidence-first
+module. It does not change the Web3-only daily runner and does not send
+outreach. See [system/tobacco-alcohol-track.md](system/tobacco-alcohol-track.md).
+
 ## Operating sequence
 
 `Discover a company off-search → verify owner-operated + 1–2 locations + no chain/franchise → verify the independent website → inspect search distribution → score the prospect`
@@ -29,6 +33,23 @@ Search-only discovery channels are rejected, and the discovery source must be pu
 - `Not found` Reply Behaviour is capped at 12/30 and `Inaccessible` is inferred only; neither can enter P0.
 - No automatic outreach, publishing, or database mutation from the research step.
 
+## Lawful tobacco/alcohol track
+
+Run the independent track against records that were discovered from a structured
+off-search source and then enriched with verification evidence:
+
+```bash
+python workflow1_tobacco_alcohol.py runs/tobacco-alcohol-records.json \
+  --date 2026-08-30 --requested 16 --output outputs/tobacco-alcohol-review.json
+python -m unittest test_tobacco_alcohol_track.py
+```
+
+This track quarantines search-engine discovery, high-risk categories, chains,
+franchises, and businesses with more than two locations. It keeps incomplete
+records in `REVIEW_REQUIRED`, reports any quota shortfall, distinguishes USDT
+from Bitcoin/XBT/Lightning, and requires observed public reply behaviour before
+marking a record `READY_FOR_REPLY_TEST`.
+
 ## Run locally
 
 ```powershell
@@ -44,10 +65,11 @@ The runner accepts `--db` and `--vault` overrides and can initialize a fresh com
 
 - `workflow1_daily.py`: validation, scoring, dedupe, import and report generation.
 - `workflow1_company_screening.py`: company-first raw-pool screening, website audit, 1–2-location/no-chain hard gate, and CSV/JSON/Markdown export.
+- `workflow1_tobacco_alcohol.py` and `prospect_os/tobacco_alcohol_track.py`: isolated lawful tobacco/alcohol track with source provenance, business/entity/activity/contact gates, payment-state separation, reply-behaviour gate, and no quota filling.
 - `workflow1_source_audit.py` and `prospect_os/source_tools.py`: read-only source auditing.
 - `system/daily-task-prompt.md`: current operating prompt.
 - `system/off-search-discovery-policy.md`: mandatory discovery provenance and same-domain quarantine rules.
 - `system/source-audit-setup.md`: audit setup and limitations.
-- `test_workflow1_v2.py`: safe fixture tests, including rejection of search-only discovery.
+- `test_workflow1_v2.py` and `test_tobacco_alcohol_track.py`: safe fixture tests, including rejection of search-only discovery and the tobacco/alcohol hard gates.
 
 The code does not guarantee replies, rankings, traffic, sales, or conversions. Human review remains required before any message is sent.
