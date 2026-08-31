@@ -66,10 +66,12 @@ The runner accepts `--db` and `--vault` overrides and can initialize a fresh com
 - `workflow1_daily.py`: validation, scoring, dedupe, import and report generation.
 - `workflow1_company_screening.py`: company-first raw-pool screening, website audit, 1–2-location/no-chain hard gate, and CSV/JSON/Markdown export.
 - `workflow1_tobacco_alcohol.py` and `prospect_os/tobacco_alcohol_track.py`: isolated lawful tobacco/alcohol track with source provenance, business/entity/activity/contact gates, payment-state separation, reply-behaviour gate, and no quota filling.
+- `intent_signal_cli.py` and `prospect_os/intent_signals.py`: read-only adapters for Agent-Reach, Chatwoot, Mautic, PostHog, n8n, and the wallet monitor. They score public activity, direct replies, owned-site buying signals, and actual payment separately; they never send outreach.
 - `workflow1_source_audit.py` and `prospect_os/source_tools.py`: read-only source auditing.
 - `system/daily-task-prompt.md`: current operating prompt.
 - `system/off-search-discovery-policy.md`: mandatory discovery provenance and same-domain quarantine rules.
 - `system/source-audit-setup.md`: audit setup and limitations.
 - `test_workflow1_v2.py` and `test_tobacco_alcohol_track.py`: safe fixture tests, including rejection of search-only discovery and the tobacco/alcohol hard gates.
+- `test_intent_signals.py`: tests that public activity cannot be upgraded to a direct reply, page behaviour cannot be upgraded to a payment, and unknown external events are discarded.
 
 The code does not guarantee replies, rankings, traffic, sales, or conversions. Human review remains required before any message is sent.

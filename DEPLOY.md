@@ -1,4 +1,7 @@
-# 部署指南 · Whale Tracker TG Bot
+# 部署指南 · LocalBiz Prospect OS
+
+本仓库同时保留原有 Whale Tracker TG Bot 钱包监控子系统。以下部署步骤针对该
+Telegram 钱包监控 worker；获客验证层本身是离线/只读 CLI，不需要 7x24 运行。
 
 本 Bot 采用 **long-polling（长轮询）** 方式运行，不需要公网端口/域名，
 因此最适合以 **后台 worker** 形式部署到云平台（Railway / Render / Fly.io / 任意 VPS）。
@@ -39,7 +42,7 @@
 ## 三、Railway 部署步骤（推荐，最简单）
 
 1. 打开 https://railway.app ，用 GitHub 登录。
-2. New Project → Deploy from GitHub repo → 选 `wallet-monitor-bot`。
+2. New Project → Deploy from GitHub repo → 选 `localbiz-prospect-os`（仓库改名完成后）。
 3. 部署后进入 Variables 标签，按上表逐个添加环境变量（`TG_PROXY` 留空）。
 4. Railway 会自动读取本仓库的 `railway.json` / `Procfile`，用 `python bot.py` 启动。
 5. 进入 Deploy Logs，看到 `✅ Bot is running` 即成功。
@@ -50,7 +53,7 @@
 ```bash
 npm i -g @railway/cli
 railway login
-cd wallet-monitor-bot
+cd localbiz-prospect-os
 railway init
 railway up
 ```
