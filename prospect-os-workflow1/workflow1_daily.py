@@ -2266,6 +2266,9 @@ def execute(source: Path, day: str, db_path: Path, vault: Path, dry_run: bool) -
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prospect OS workflow 1 compatible daily runner")
+    parser.add_argument('--mode', choices=['legacy', 'buyer-intent'], default='buyer-intent')
+    parser.add_argument('--output-dir', type=Path, default=Path('outputs/buyer-intent'))
+    parser.add_argument('--history', type=Path, help='Historical contact/domain export for cross-batch exclusion')
     parser.add_argument("source", type=Path, nargs="?")
     parser.add_argument("--date", help="YYYY-MM-DD")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -2294,7 +2297,12 @@ def main() -> int:
         if args.source is None or args.date is None:
             parser.error("source and --date are required unless --migrate-only is used")
         datetime.strptime(args.date, "%Y-%m-%d")
-        result = execute(args.source, args.date, args.db, args.vault, args.dry_run)
+        args.db.parent.mkdir(parents=True, exist_ok=True)
+        if args.mode == 'buyer-intent':
+            from prospect_os.buyer_intent import execute as execute_buyer
+            result = execute_buyer(args.source, args.date, args.db, args.output_dir, args.history, not args.dry_run)
+        else:
+            result = execute(args.source, args.date, args.db, args.vault, args.dry_run)
     except Exception as exc:
         print(json.dumps({"complete": False, "error": str(exc)}, ensure_ascii=False, indent=2))
         return 1

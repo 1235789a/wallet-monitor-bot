@@ -1,6 +1,31 @@
-# Prospect OS Workflow 1 — Final v4
+# Prospect OS Workflow 1 — Buyer-Intent Sprint
 
-This folder is a portable snapshot of the current Web3-only Prospect OS workflow. It is intentionally isolated from the host application's existing files.
+The default runner now prioritizes paid-prospect evidence rather than contact volume. It preserves
+the existing company-first discovery, verification and deduplication foundation while adding a
+strict buyer-intent mode. The current operating rules are in
+[system/buyer-intent-sprint.md](system/buyer-intent-sprint.md).
+
+The first production mix is fixed at **10 high-ticket B2B + 10 independent local businesses**.
+Neither side may fill the other side's shortfall. WhatsApp, Telegram, email and verified founder
+social profiles are valid routes; no channel quota is a success metric.
+
+Buyer-intent mode requires 5–10 human-reviewed non-brand buyer queries and at least five actually
+tested query comparisons before P0. Every comparison records the platform, date, returned URLs,
+prospect presence and competitors. Search results and third-party directories are never labelled
+as ChatGPT, Gemini or Perplexity recommendations.
+
+```bash
+python workflow1_daily.py runs/reviewed-prospects.json --date 2026-09-10 \
+  --mode buyer-intent --db data/prospects.db --output-dir outputs/buyer-intent --dry-run
+python -m unittest discover -v
+```
+
+Dry-run uses an in-memory database and does not mutate the supplied database. Remove `--dry-run`
+only after human review of evidence and contact routes.
+
+This folder is the portable Prospect OS workflow. Buyer-intent mode supports the fixed B2B/local
+split; the older Web3-only path remains available as legacy compatibility code. It is intentionally
+isolated from the host application's existing files.
 
 The lawful tobacco/alcohol prospect track is a separate, evidence-first
 module. It does not change the Web3-only daily runner and does not send
@@ -22,7 +47,10 @@ Google, Bing, SEO result pages, and AI search are diagnostic sources only. Every
 
 Search-only discovery channels are rejected, and the discovery source must be public and on a different domain from the company website. The full hard gate and quarantine behavior are documented in [system/off-search-discovery-policy.md](system/off-search-discovery-policy.md).
 
-## Current P0 rules
+## Legacy v4 P0 rules
+
+The rules below document `--mode legacy`; they are retained for compatibility and are no longer
+the default buyer-intent qualification path.
 
 - Web3 only; handmade and regulated/high-risk categories stay excluded.
 - Owner-operated or independent small businesses only. Chains, franchises, branded branches, unknown ownership, and businesses with 3+ locations are rejected in code.

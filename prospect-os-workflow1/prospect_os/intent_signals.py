@@ -22,16 +22,12 @@ from typing import Any, Iterable
 
 
 DIRECT_REPLY_EVENTS = {
-    "message_delivered",
-    "message_read",
     "direct_reply",
     "meaningful_reply",
     "asked_details",
     "asked_price",
     "trial_requested",
     "not_interested",
-    "sent_no_response",
-    "read_no_response",
 }
 
 REPLY_WEIGHTS = {
@@ -175,7 +171,7 @@ def normalize_external_event(source: str, payload: dict[str, Any]) -> list[Inten
             "email_click": "email_clicked",
             "email.reply": "direct_reply",
             "email_reply": "direct_reply",
-            "page.visit": "pricing_page_view",
+            "page.visit": "preview_page_view",
             "pricing_page_view": "pricing_page_view",
             "form.submit": "form_submitted",
             "form_submitted": "form_submitted",
