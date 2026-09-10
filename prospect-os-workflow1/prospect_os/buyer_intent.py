@@ -347,7 +347,11 @@ def execute(source, day, db_path, output_dir, history_path=None, commit=False):
         d = normalize_domain(r.get('website_url', ''))
         if commit and d and result['qualification'] != 'DUPLICATE':
             conn.execute('INSERT INTO buyer_assessments VALUES(?,?,?) ON CONFLICT(domain) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at', (d,json.dumps(result),utcnow()))
-            for stage in ['RAW'] + (['QUALIFIED', 'P0'] if result['qualification']=='P0' else []):
+            # P0 qualification already requires five tested buyer queries,
+            # competitor evidence, three sourced gaps and a first fix. That is
+            # an internally completed audit; sending it is tracked separately
+            # as the AUDIT_SENT touchpoint.
+            for stage in ['RAW'] + (['QUALIFIED', 'P0', 'AUDITED'] if result['qualification']=='P0' else []):
                 record_event(conn, {'event_id':f'{d}:{stage}', 'website_url':r['website_url'], 'stage':stage,
                                    'occurred_at':utcnow(), 'evidence_ref':str(source)})
     conn.commit()

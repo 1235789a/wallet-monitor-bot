@@ -133,6 +133,20 @@ class BuyerIntentTests(unittest.TestCase):
             self.assertEqual(decisions[0]["qualification"], "DUPLICATE")
             self.assertEqual(decisions[1]["qualification"], "P0")
 
+    def test_commit_records_internal_audit_but_not_audit_sent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "rows.json"
+            source.write_text(json.dumps([valid_row()]))
+            db = root / "prospects.db"
+            execute(source, "2026-09-10", db, root / "out", commit=True)
+            conn = sqlite3.connect(db)
+            stages = {r[0] for r in conn.execute("SELECT stage FROM buyer_events")}
+            touches = list(conn.execute("SELECT event_kind FROM buyer_touchpoints"))
+            self.assertEqual(stages, {"RAW", "QUALIFIED", "P0", "AUDITED"})
+            self.assertEqual(touches, [])
+            conn.close()
+
     def test_payment_needs_unique_attributed_invoice(self):
         conn = sqlite3.connect(":memory:")
         ensure_buyer_schema(conn)
