@@ -237,7 +237,7 @@ def candidate_category(tags: dict[str, str], row: dict[str, Any]) -> str:
     return str((row.get("tags") or {}).get("category", "other"))
 
 
-def fetch_html(url: str, timeout: int = 12) -> tuple[str, str, str]:
+def fetch_html(url: str, timeout: int = 12, max_bytes: int = 1_500_000) -> tuple[str, str, str]:
     request = Request(
         url,
         headers={
@@ -250,7 +250,7 @@ def fetch_html(url: str, timeout: int = 12) -> tuple[str, str, str]:
         content_type = response.headers.get_content_type() if response.headers else ""
         if content_type not in {"text/html", "application/xhtml+xml"}:
             raise ValueError(f"unsupported content type: {content_type}")
-        body = response.read(1_500_000)
+        body = response.read(max_bytes)
         charset = response.headers.get_content_charset() if response.headers else None
         return body.decode(charset or "utf-8", errors="replace"), response.geturl(), content_type
 
@@ -534,12 +534,14 @@ def screen(
             else "medium-high" if item["contact_type"] in {"whatsapp", "telegram"}
             else "medium"
         )
-        geo_gap = "strong" if not audit.has_local_business_schema and not audit.has_faq_schema else "moderate"
+        # Schema presence is a page observation, not proof of an AI/search visibility gap.
+        # Buyer-query comparisons belong to buyer-intent mode; keep this legacy field neutral.
+        geo_gap = "unverified"
         final_score = item["prefilter_score"]
         final_score += 12 if ownership_certainty == "self_reported" else 4
         final_score += 6 if audit.location_signals else 0
         final_score += 5 if audit.has_direct_message_link else 0
-        final_score += 5 if geo_gap == "strong" else 2
+        final_score += 0
         discovery = discovery_url(item["row"])
         ownership_note = (
             f"BTC Map/OpenStreetMap shows {item['location_count']} listing(s) for the normalized business identity; "
@@ -582,9 +584,8 @@ def screen(
             "has_faq_schema": audit.has_faq_schema,
             "geo_gap": geo_gap,
             "geo_gap_note": (
-                "Audited pages expose neither LocalBusiness/Organization schema nor FAQ schema."
-                if geo_gap == "strong"
-                else "The site has some structured entity/FAQ markup, but further AI-answer diagnostics are still needed."
+                "Schema observations were recorded, but no GEO/search gap is claimed until "
+                "buyer-intent queries are actually tested against competitors."
             ),
             "latitude": item["latitude"],
             "longitude": item["longitude"],

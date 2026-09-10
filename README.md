@@ -1,4 +1,28 @@
-# 🐋 Whale Tracker TG Bot
+# LocalBiz Prospect OS
+
+Evidence-first operating system for small, lawful local-business prospecting,
+reply validation, purchase-intent measurement, and USDT payment confirmation.
+
+The original wallet-monitor bot remains a subsystem under this repository. It
+is no longer the repository's overall product name.
+
+## Prospect OS integration layer
+
+The isolated `prospect-os-workflow1` module combines:
+
+- off-search discovery and small-business/no-chain gates;
+- Agent-Reach public activity evidence;
+- Chatwoot conversation and first-response evidence;
+- Mautic/PostHog owned-site and campaign events;
+- n8n event transport;
+- wallet-monitor payment confirmation.
+
+The integration layer is read-only with respect to prospects. It does not send
+WhatsApp/Telegram messages, use unofficial WhatsApp sessions, or treat a
+contact button, crypto signal, page view, or public comment as proof of a direct
+reply or payment. See [`prospect-os-workflow1/system/intent-validation.md`](prospect-os-workflow1/system/intent-validation.md).
+
+## Wallet monitor subsystem
 
 实时监控链上鲸鱼钱包动向的 Telegram Bot。支持 Ethereum、BSC、Tron 三链，USDT 收款，并内置「聪明钱 Alpha 信号」与每日日报。
 
@@ -83,7 +107,7 @@ python bot.py
 ## 项目结构
 
 ```
-wallet-monitor-bot/
+localbiz-prospect-os/
 ├── bot.py          # TG Bot 主程序（命令 + 按钮 + 后台循环）
 ├── config.py       # 配置（自动加载 .env）
 ├── models.py       # SQLite 数据库模型

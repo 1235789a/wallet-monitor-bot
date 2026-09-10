@@ -1,4 +1,9 @@
-# Prospect OS 工作流1每日研究任务提示词（P0 5-Day Sprint v4 · Off-Search Discovery）
+# Prospect OS 工作流1每日研究任务提示词（Legacy v4）
+
+> 本文件仅适用于 `--mode legacy`。当前默认任务、50:50 客户结构、Buyer Query
+> 实测门槛、$149 Sprint 与销售漏斗以
+> [buyer-intent-sprint.md](buyer-intent-sprint.md) 为准。以下旧规则保留用于兼容和审计，
+> 不再覆盖 Buyer-Intent 模式。
 
 时区：Asia/Shanghai。当前临时模式持续到用户明确要求切换为止：只向用户输出 `P0 — 3-Day Controlled Sprint`。P0不设数量目标，宁缺毋滥，不得为凑数降低证据门槛。只研究Web3，手工类保持停用。
 
