@@ -69,12 +69,16 @@ def enrich(row):
 
 
 def main():
-    a=argparse.ArgumentParser();a.add_argument('--limit',type=int,default=60);args=a.parse_args()
-    raw=json.loads(Path('runs/buyer-sprint/discovery/raw.json').read_text())
+    a=argparse.ArgumentParser();a.add_argument('--limit',type=int,default=60)
+    a.add_argument('--source',type=Path,default=Path('runs/buyer-sprint/discovery/raw.json'))
+    a.add_argument('--output',type=Path,default=Path('runs/buyer-sprint/enriched.json'))
+    args=a.parse_args()
+    raw=json.loads(args.source.read_text())
     pool=[r for r in raw if r.get('directory_team_range') in ('2 - 9','10 - 49')]
     random.Random(20260907).shuffle(pool)
     # Include every small-company block encountered, in a fixed shuffled order, not directory rank.
-    targets=pool[:args.limit];output=Path('runs/buyer-sprint/enriched.json')
+    targets=pool[:args.limit];output=args.output
+    output.parent.mkdir(parents=True,exist_ok=True)
     previous=json.loads(output.read_text()) if output.exists() else []
     done={r['directory_id']:r for r in previous}
     with ThreadPoolExecutor(max_workers=8) as ex:

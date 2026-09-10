@@ -62,6 +62,10 @@ def valid_row(track="b2b"):
         "outreach": "Evidence-based opener",
         "recommended_first_fix": "Build one buyer-query service answer page.",
     }
+    if track == "local":
+        row["location_count"] = 1
+        row["location_count_verified"] = evidence(
+            "Full source pool and official identity resolve to one location.")
     return row
 
 
@@ -83,6 +87,20 @@ class BuyerIntentTests(unittest.TestCase):
              "evidence": evidence("Broadcast channel")},
         ]
         self.assertIn("official_contact_source", qualify(row, date(2026, 9, 10))["missing"])
+
+    def test_local_pool_rejects_three_or_more_locations(self):
+        row = valid_row("local")
+        row["location_count"] = 69
+        result = qualify(row, date(2026, 9, 10))
+        self.assertEqual(result["qualification"], "QUARANTINED")
+        self.assertIn("local_business_has_more_than_two_locations", result["hard_failures"])
+
+    def test_local_pool_requires_location_count_evidence(self):
+        row = valid_row("local")
+        row.pop("location_count_verified")
+        result = qualify(row, date(2026, 9, 10))
+        self.assertEqual(result["qualification"], "REVIEW_REQUIRED")
+        self.assertIn("verified_location_count", result["missing"])
 
     def test_dry_run_does_not_create_database(self):
         with tempfile.TemporaryDirectory() as temp:

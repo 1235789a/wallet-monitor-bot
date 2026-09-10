@@ -15,7 +15,9 @@ must be diagnosed at the failed funnel stage; it must not automatically trigger 
 - Track A (10 of 20): small, founder-reachable Web3/blockchain/token/exchange/DeFi, AI/software or
   high-ticket B2B digital-service companies.
 - Track B (10 of 20): lawful independent tobacco/vape, alcohol/bar or adult-retail businesses with
-  one or two locations and an independent site.
+  one or two locations and an independent site. Count locations across the complete source pool by
+  normalized domain/brand and reconcile that count to the official identity; one map point alone is
+  not proof. Three or more locations is a hard failure.
 - One track never fills the other track's shortfall. Chains, franchises and do-not-contact records
   are excluded. The system reports fewer than 20 rather than lowering evidence requirements.
 

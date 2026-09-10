@@ -96,6 +96,14 @@ def qualify(row, today):
             missing.append(field)
     if row.get('chain') is True or row.get('do_not_contact') is True:
         hard.append('chain_or_dnc')
+    if row.get('icp') in LOCAL_ICP:
+        location_count = row.get('location_count')
+        if not evidence_ok(row.get('location_count_verified')):
+            missing.append('verified_location_count')
+        if not isinstance(location_count, int) or location_count < 1:
+            missing.append('valid_location_count')
+        elif location_count > 2:
+            hard.append('local_business_has_more_than_two_locations')
     contacts = [c for c in row.get('contacts', []) if contact_key(c) and evidence_ok(c.get('evidence'))]
     if not contacts:
         missing.append('official_contact_source')
