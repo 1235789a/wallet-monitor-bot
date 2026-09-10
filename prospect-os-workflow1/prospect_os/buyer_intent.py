@@ -259,6 +259,68 @@ def funnel_report(conn):
             'goal_rmb_5_months': 100000}
 
 
+def deduplicate_results(results, old_domains, old_contacts):
+    """Keep the strongest record in each current-batch identity cluster.
+
+    Domain/contact duplicates used to be resolved by input order, allowing an
+    incomplete directory row to suppress a fully reviewed record for the same
+    business. Historical matches still exclude every current record.
+    """
+    parent = list(range(len(results)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(a, b):
+        a, b = find(a), find(b)
+        if a != b:
+            parent[b] = a
+
+    domain_owner, contact_owner = {}, {}
+    external = set()
+    for i, result in enumerate(results):
+        domain = normalize_domain(result.get('website_url', ''))
+        contacts = {contact_key(c) for c in result.get('contacts', []) if contact_key(c)}
+        if (domain and domain in old_domains) or contacts & old_contacts:
+            external.add(i)
+        if domain:
+            if domain in domain_owner:
+                union(i, domain_owner[domain])
+            else:
+                domain_owner[domain] = i
+        for key in contacts:
+            if key in contact_owner:
+                union(i, contact_owner[key])
+            else:
+                contact_owner[key] = i
+
+    groups = {}
+    for i in range(len(results)):
+        groups.setdefault(find(i), []).append(i)
+    status_rank = {'P0': 3, 'REVIEW_REQUIRED': 2, 'QUARANTINED': 1}
+    for members in groups.values():
+        eligible = [i for i in members if i not in external]
+        winner = max(eligible, key=lambda i: (
+            status_rank.get(results[i]['qualification'], 0),
+            results[i].get('score', 0),
+            -len(results[i].get('missing', [])),
+            -i,
+        )) if eligible else None
+        winner_domain = normalize_domain(results[winner].get('website_url', '')) if winner is not None else ''
+        for i in members:
+            if i in external or (winner is not None and i != winner):
+                results[i].update(
+                    qualification='DUPLICATE',
+                    missing=['historical_domain_or_contact_duplicate' if i in external
+                             else 'current_batch_domain_or_contact_duplicate'],
+                    duplicate_of=winner_domain or None,
+                )
+    return results
+
+
 def execute(source, day, db_path, output_dir, history_path=None, commit=False):
     rows = json.loads(Path(source).read_text())
     today = date.fromisoformat(day)
@@ -278,16 +340,11 @@ def execute(source, day, db_path, output_dir, history_path=None, commit=False):
     for r in history:
         old_domains.add(normalize_domain(r.get('website_url', '')))
         old_contacts.update(contact_key(c) for c in r.get('contacts', []) if contact_key(c))
-    seen, seen_contacts, decisions = set(), set(), []
-    for r in rows:
+    decisions = deduplicate_results([qualify(r, today) for r in rows], old_domains, old_contacts)
+    seen = {normalize_domain(r.get('website_url', '')) for r in rows
+            if normalize_domain(r.get('website_url', ''))}
+    for r, result in zip(rows, decisions):
         d = normalize_domain(r.get('website_url', ''))
-        keys = {contact_key(c) for c in r.get('contacts', []) if contact_key(c)}
-        result = qualify(r, today)
-        if (d and (d in seen or d in old_domains)) or keys & (seen_contacts | old_contacts):
-            result.update(qualification='DUPLICATE', missing=['domain_or_contact_duplicate'])
-        if d: seen.add(d)
-        seen_contacts.update(keys)
-        decisions.append(result)
         if commit and d and result['qualification'] != 'DUPLICATE':
             conn.execute('INSERT INTO buyer_assessments VALUES(?,?,?) ON CONFLICT(domain) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at', (d,json.dumps(result),utcnow()))
             for stage in ['RAW'] + (['QUALIFIED', 'P0'] if result['qualification']=='P0' else []):

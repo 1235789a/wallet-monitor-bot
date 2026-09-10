@@ -112,6 +112,27 @@ class BuyerIntentTests(unittest.TestCase):
             self.assertFalse(db.exists())
             self.assertEqual(summary["selected_mix"], {"b2b": 1, "local": 0})
 
+    def test_dedup_keeps_reviewed_record_when_placeholder_comes_first(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            reviewed = valid_row()
+            placeholder = {
+                "company_name": "Sample directory placeholder",
+                "website_url": reviewed["website_url"],
+                "directory_id": "older-source-row",
+                "discovery_channel": "industry_directory",
+                "discovery_source_url": "https://directory.example/older-source-row",
+                "icp": "blockchain_agency",
+            }
+            source = root / "rows.json"
+            source.write_text(json.dumps([placeholder, reviewed]))
+            out = root / "out"
+            summary = execute(source, "2026-09-10", root / "prospects.db", out, commit=False)
+            decisions = json.loads((out / "decisions.json").read_text())
+            self.assertEqual(summary["selected"], 1)
+            self.assertEqual(decisions[0]["qualification"], "DUPLICATE")
+            self.assertEqual(decisions[1]["qualification"], "P0")
+
     def test_payment_needs_unique_attributed_invoice(self):
         conn = sqlite3.connect(":memory:")
         ensure_buyer_schema(conn)
