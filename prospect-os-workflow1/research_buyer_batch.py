@@ -2,7 +2,6 @@
 import argparse
 import hashlib
 import json
-import random
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ from urllib.parse import urljoin, urlsplit, parse_qs
 
 from workflow1_company_screening import TextAndLinksParser, fetch_html
 from workflow1_daily import normalize_domain
+from prospect_os.sampling import DEFAULT_SEED, sampling_record_key, stratified_sample
 
 CACHE = Path('runs/buyer-sprint/pages')
 
@@ -69,24 +69,31 @@ def enrich(row):
 
 
 def main():
-    a=argparse.ArgumentParser();a.add_argument('--limit',type=int,default=60)
+    a=argparse.ArgumentParser();a.add_argument('--limit',type=int,default=30)
     a.add_argument('--source',type=Path,default=Path('runs/buyer-sprint/discovery/raw.json'))
     a.add_argument('--output',type=Path,default=Path('runs/buyer-sprint/enriched.json'))
+    a.add_argument('--sampling-summary',type=Path)
+    a.add_argument('--seed',type=int,default=DEFAULT_SEED)
     args=a.parse_args()
     raw=json.loads(args.source.read_text())
-    pool=[r for r in raw if r.get('directory_team_range') in ('2 - 9','10 - 49')]
-    random.Random(20260907).shuffle(pool)
-    # Include every small-company block encountered, in a fixed shuffled order, not directory rank.
-    targets=pool[:args.limit];output=args.output
+    targets, summary = stratified_sample(raw, limit=args.limit, seed=args.seed)
+    output=args.output
     output.parent.mkdir(parents=True,exist_ok=True)
+    summary_path=args.sampling_summary or output.with_name('sampling-summary.json')
+    summary_path.parent.mkdir(parents=True,exist_ok=True)
+    summary_path.write_text(json.dumps(summary,ensure_ascii=False,indent=2))
     previous=json.loads(output.read_text()) if output.exists() else []
-    done={r['directory_id']:r for r in previous}
+    target_keys={sampling_record_key(r) for r in targets}
+    # A reused output file may contain an older unstratified batch.  Reuse its
+    # cached enrichment only for records selected in this round.
+    done={sampling_record_key(r):r for r in previous if sampling_record_key(r) in target_keys}
     with ThreadPoolExecutor(max_workers=8) as ex:
-        fs={ex.submit(enrich,r):r for r in targets if r['directory_id'] not in done}
+        fs={ex.submit(enrich,r):r for r in targets if sampling_record_key(r) not in done}
         for f in as_completed(fs):
-            r=f.result();done[r['directory_id']]=r
-            output.write_text(json.dumps(list(done.values()),ensure_ascii=False,indent=2))
+            r=f.result();done[sampling_record_key(r)]=r
+            output.write_text(json.dumps([done[sampling_record_key(t)] for t in targets if sampling_record_key(t) in done],ensure_ascii=False,indent=2))
             print(json.dumps({'done':len(done),'company':r['company_name'],'status':r['research_status'],'contact_candidates':len(r.get('contact_candidates',[]))}),flush=True)
-    print(json.dumps({'raw':len(raw),'small_directory_candidates':len(pool),'enriched':len(done)}))
+    output.write_text(json.dumps([done[sampling_record_key(t)] for t in targets if sampling_record_key(t) in done],ensure_ascii=False,indent=2))
+    print(json.dumps({'raw':len(raw),'selected':len(targets),'enriched':len(done),'sampling_summary':str(summary_path)}))
 
 if __name__=='__main__':main()
