@@ -8,6 +8,11 @@ This policy is a hard gate for Prospect OS Workflow 1. It prevents search-rankin
 
 Google, Bing, SEO result pages, and AI-search answers may be used only after a company is already in the raw pool. They are diagnostic evidence, never the primary discovery source.
 
+The raw pool must be frozen before website/contact enrichment. For machine-collected records retain
+the source record ID/URL, retrieval time, original record or artifact reference, and a stable
+snapshot hash. A website recovered after discovery must record its discovery method and whether it
+is inferred. It must not replace or obscure the independent company-discovery source.
+
 ## Accepted first-discovery sources
 
 Use a public source that does not depend on the company ranking for its own industry terms:
@@ -54,6 +59,10 @@ Each raw record must contain:
 - one `ownership_locations` evidence item matching the ownership/location source URL
 
 A missing or same-domain discovery source is a validation failure, not a reason to fill the batch with another weak record.
+
+A missing website field in OSM, a registry or an open-data row means only “not present in this
+source record.” It does not prove that the business has no website. Likewise, an OSM edit timestamp
+is source-record activity, not evidence that the business is currently marketing or operating.
 
 A local-business chain, franchise, branded branch, business with three or more stores, or a local
 record whose independent ownership/store count is unknown is a hard rejection. A directory's

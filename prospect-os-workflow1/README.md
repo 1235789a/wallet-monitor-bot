@@ -103,3 +103,39 @@ The runner accepts `--db` and `--vault` overrides and can initialize a fresh com
 - `test_intent_signals.py`: tests that public activity cannot be upgraded to a direct reply, page behaviour cannot be upgraded to a payment, and unknown external events are discarded.
 
 The code does not guarantee replies, rankings, traffic, sales, or conversions. Human review remains required before any message is sent.
+
+## Source-first raw company pools
+
+Build the company pool before doing any search or AI-visibility work. The native adapters implement
+the useful parts of the evaluated OSM lead-pool and website-contact projects without installing
+overlapping crawler applications as opaque runtime dependencies.
+
+```bash
+# Fetch high-value local categories from a bounded OSM/Overpass geography.
+python build_source_pool.py overpass --bbox 25.70,-80.35,25.90,-80.10 \
+  --sector regulated_retail --sector automotive_high_value \
+  --output runs/miami-raw.json
+# `--place "Miami, Florida"` may replace `--bbox`; place geocoding only resolves
+# the boundary and is not used to discover businesses.
+
+# Or normalize an already downloaded OSM, public GeoJSON or registry CSV snapshot.
+python build_source_pool.py osm-json runs/overpass.json --output runs/osm-raw.json
+python build_source_pool.py geojson runs/licenses.geojson \
+  --dataset-url https://data.example.gov/business-licenses \
+  --source-name city-business-licenses --output runs/licenses-raw.json
+python build_source_pool.py merge runs/osm-raw.json runs/licenses-raw.json \
+  --output runs/combined-raw.json
+
+# Enrich only the websites already present in the frozen source pool.
+python enrich_company_contacts.py runs/miami-raw.json \
+  --output runs/miami-contact-enriched.json
+```
+
+Each raw-pool run writes both the JSON records and a `.manifest.json` with source names, input URLs,
+record count and a SHA-256 snapshot hash. OSM records retain the original object URL and all observed
+locations. A missing source `website` tag is recorded as unknown, not as proof that no website
+exists. Contact enrichment respects robots by default, never turns a phone into WhatsApp, and never
+equates a business account with a decision maker.
+
+See [system/source-pool-integrations.md](system/source-pool-integrations.md) for evaluated upstream
+projects, enabled adapters and deliberately disabled integrations.

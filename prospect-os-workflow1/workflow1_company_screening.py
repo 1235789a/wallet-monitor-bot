@@ -411,10 +411,6 @@ def prefilter(rows: list[dict[str, Any]], run_day: date) -> tuple[list[dict[str,
             reasons["missing_name"] += 1
         elif not website:
             reasons["no_independent_website"] += 1
-        elif not contact_type:
-            reasons["no_public_direct_contact"] += 1
-        elif not payment:
-            reasons["no_public_crypto_payment_signal"] += 1
         elif category in DISALLOWED_CATEGORIES or any(token in risk_text for token in DISALLOWED_CATEGORIES):
             reasons["disallowed_or_financial_category"] += 1
         elif key_counts[key] > MAX_LOCATIONS:
@@ -426,8 +422,10 @@ def prefilter(rows: list[dict[str, Any]], run_day: date) -> tuple[list[dict[str,
             check_age = freshness_days(check_date, run_day)
             updated_age = freshness_days(str(row.get("updated_at", "")), run_day)
             score = 0
-            score += 24 if contact_type == "whatsapp" else 16 if contact_type == "telegram" else 12
-            score += 16 if tags.get("currency:USDT") == "yes" else 8
+            # Contact convenience and crypto support do not determine ICP.
+            # They remain tiny tie-breakers for this legacy BTC Map screen.
+            score += 2 if contact_type else 0
+            score += 2 if tags.get("currency:USDT") == "yes" else 1 if payment else 0
             score += 18 if check_age is not None and check_age <= 365 else 12 if check_age is not None and check_age <= 730 else 4
             score += 10 if updated_age is not None and updated_age <= 365 else 4
             score += 10 if key_counts[key] == 1 else 7
@@ -529,18 +527,14 @@ def screen(
         country_name, country_code = country_for(item["latitude"], item["longitude"], countries)
         city = tags.get("addr:city") or tags.get("addr:place") or "Unknown"
         ownership_certainty = "self_reported" if audit.independent_signals else "inferred"
-        owner_contact_likelihood = (
-            "high" if item["contact_type"] in {"whatsapp", "telegram"} and audit.has_direct_message_link
-            else "medium-high" if item["contact_type"] in {"whatsapp", "telegram"}
-            else "medium"
-        )
+        owner_contact_likelihood = "unknown_owner_unverified"
         # Schema presence is a page observation, not proof of an AI/search visibility gap.
         # Buyer-query comparisons belong to buyer-intent mode; keep this legacy field neutral.
         geo_gap = "unverified"
         final_score = item["prefilter_score"]
         final_score += 12 if ownership_certainty == "self_reported" else 4
         final_score += 6 if audit.location_signals else 0
-        final_score += 5 if audit.has_direct_message_link else 0
+        final_score += 1 if audit.has_direct_message_link else 0
         final_score += 0
         discovery = discovery_url(item["row"])
         ownership_note = (
@@ -596,7 +590,8 @@ def screen(
                 f"Individually reviewed {item['company_name']} as a {item['category']} business. "
                 f"The off-search directory shows {item['location_count']} location(s), the audited website "
                 f"contains {len(audit.independent_signals)} independent/owner signal(s), no chain or 3+ "
-                f"location signal was found, and the public contact route is {item['contact_type']}. "
+                f"location signal was found, and the public contact route is "
+                f"{item['contact_type'] or 'not yet enriched'}. Route ownership is unverified. "
                 f"The preliminary GEO gap is {geo_gap}."
             ),
         })
@@ -666,7 +661,7 @@ def write_outputs(result: dict[str, Any], output_dir: Path) -> tuple[Path, Path,
 - 实际逐站审计：{result['website_audits_attempted']}
 - 输出：{result['qualified_reviewed']} 家
 - 发现方法：先从 BTC Map/OpenStreetMap 商家目录取得公司，再逐家公司审计；未用搜索结果页发现候选。
-- 硬排除：已观察到连锁/加盟标记、同一身份3家及以上、无独立官网、无公开直接联系方式、金融ATM/高风险类别。
+- 硬排除：已观察到连锁/加盟标记、同一身份3家及以上、无独立官网、金融ATM/高风险类别。联系方式与加密支付只作后续补全/轻量加分，不决定ICP。
 - 重要限制：`ownership_certainty=inferred` 仍需在发送前人工确认老板身份；它不会被冒充成已确认事实。
 
 ## 候选名单
