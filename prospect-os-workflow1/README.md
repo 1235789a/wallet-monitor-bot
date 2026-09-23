@@ -164,9 +164,7 @@ python build_source_pool.py geojson runs/licenses.geojson \
 python build_source_pool.py merge runs/osm-raw.json runs/licenses-raw.json \
   --output runs/combined-raw.json
 
-# Enrich only the websites already present in the frozen source pool.
-python enrich_company_contacts.py runs/miami-raw.json \
-  --output runs/miami-contact-enriched.json
+# Next, sample and lock this RAW pool as shown above before contact enrichment.
 ```
 
 Each raw-pool run writes both the JSON records and a `.manifest.json` with source names, input URLs,
