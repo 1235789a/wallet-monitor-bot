@@ -2269,6 +2269,7 @@ def main() -> int:
     parser.add_argument('--mode', choices=['legacy', 'buyer-intent'], default='buyer-intent')
     parser.add_argument('--output-dir', type=Path, default=Path('outputs/buyer-intent'))
     parser.add_argument('--history', type=Path, help='Historical contact/domain export for cross-batch exclusion')
+    parser.add_argument('--sample-lock', type=Path, default=Path('runs/buyer-sprint/sampled-lock.json'))
     parser.add_argument("source", type=Path, nargs="?")
     parser.add_argument("--date", help="YYYY-MM-DD")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -2300,7 +2301,8 @@ def main() -> int:
         args.db.parent.mkdir(parents=True, exist_ok=True)
         if args.mode == 'buyer-intent':
             from prospect_os.buyer_intent import execute as execute_buyer
-            result = execute_buyer(args.source, args.date, args.db, args.output_dir, args.history, not args.dry_run)
+            result = execute_buyer(args.source, args.date, args.db, args.output_dir, args.history,
+                                   not args.dry_run, args.sample_lock)
         else:
             result = execute(args.source, args.date, args.db, args.vault, args.dry_run)
     except Exception as exc:

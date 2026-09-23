@@ -8,6 +8,7 @@ from pathlib import Path
 from prospect_os.buyer_intent import (
     ensure_buyer_schema, qualify, record_event, record_touchpoint, execute,
 )
+from prospect_os.sample_lock import freeze_sample
 
 
 CHECKED = "2026-09-10T08:00:00+00:00"
@@ -107,8 +108,10 @@ class BuyerIntentTests(unittest.TestCase):
             root = Path(temp)
             source = root / "rows.json"
             source.write_text(json.dumps([valid_row()]))
+            freeze_sample(root / 'sampled-lock.json', [valid_row()], seed=1, limit=1)
             db = root / "prospects.db"
-            summary = execute(source, "2026-09-10", db, root / "out", commit=False)
+            summary = execute(source, "2026-09-10", db, root / "out", commit=False,
+                              sample_lock=root / 'sampled-lock.json')
             self.assertFalse(db.exists())
             self.assertEqual(summary["selected_mix"], {"b2b": 1, "local": 0})
 
@@ -126,8 +129,10 @@ class BuyerIntentTests(unittest.TestCase):
             }
             source = root / "rows.json"
             source.write_text(json.dumps([placeholder, reviewed]))
+            freeze_sample(root / 'sampled-lock.json', [placeholder, reviewed], seed=1, limit=2)
             out = root / "out"
-            summary = execute(source, "2026-09-10", root / "prospects.db", out, commit=False)
+            summary = execute(source, "2026-09-10", root / "prospects.db", out, commit=False,
+                              sample_lock=root / 'sampled-lock.json')
             decisions = json.loads((out / "decisions.json").read_text())
             self.assertEqual(summary["selected"], 1)
             self.assertEqual(decisions[0]["qualification"], "DUPLICATE")
@@ -138,8 +143,10 @@ class BuyerIntentTests(unittest.TestCase):
             root = Path(temp)
             source = root / "rows.json"
             source.write_text(json.dumps([valid_row()]))
+            freeze_sample(root / 'sampled-lock.json', [valid_row()], seed=1, limit=1)
             db = root / "prospects.db"
-            execute(source, "2026-09-10", db, root / "out", commit=True)
+            execute(source, "2026-09-10", db, root / "out", commit=True,
+                    sample_lock=root / 'sampled-lock.json')
             conn = sqlite3.connect(db)
             stages = {r[0] for r in conn.execute("SELECT stage FROM buyer_events")}
             touches = list(conn.execute("SELECT event_kind FROM buyer_touchpoints"))

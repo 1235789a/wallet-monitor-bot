@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 from workflow1_daily import (DISCOVERY_CHANNELS, normalize_domain,
                              normalize_company_name, ensure_v2_schema, public_url)
+from .sample_lock import DEFAULT_LOCK, align_to_lock, load_lock, verify_final_ids
 
 WEIGHTS = {'acquisition_investment': 25, 'buyer_value': 15, 'visibility_gap': 25,
            'decision_access': 15, 'delivery_fit': 10, 'recent_activity': 8, 'usdt': 2}
@@ -321,8 +322,18 @@ def deduplicate_results(results, old_domains, old_contacts):
     return results
 
 
-def execute(source, day, db_path, output_dir, history_path=None, commit=False):
-    rows = json.loads(Path(source).read_text())
+def execute(source, day, db_path, output_dir, history_path=None, commit=False, sample_lock=DEFAULT_LOCK):
+    output_dir = Path(output_dir)
+    lock = load_lock(Path(sample_lock))
+    try:
+        rows = align_to_lock(json.loads(Path(source).read_text()), lock,
+                             rejected_path=output_dir / 'rejected-not-in-sample-lock.json')
+        verify_final_ids(rows, lock)
+    except (ValueError, KeyError):
+        # A reused output directory must not expose an old sales shortlist as this run's result.
+        for name in ('top20.json', 'top5.json'):
+            (output_dir / name).unlink(missing_ok=True)
+        raise
     today = date.fromisoformat(day)
     history = json.loads(Path(history_path).read_text()) if history_path else []
     if commit:
@@ -341,6 +352,7 @@ def execute(source, day, db_path, output_dir, history_path=None, commit=False):
         old_domains.add(normalize_domain(r.get('website_url', '')))
         old_contacts.update(contact_key(c) for c in r.get('contacts', []) if contact_key(c))
     decisions = deduplicate_results([qualify(r, today) for r in rows], old_domains, old_contacts)
+    verify_final_ids(decisions, lock)
     seen = {normalize_domain(r.get('website_url', '')) for r in rows
             if normalize_domain(r.get('website_url', ''))}
     for r, result in zip(rows, decisions):
@@ -363,6 +375,7 @@ def execute(source, day, db_path, output_dir, history_path=None, commit=False):
     raw_ids = {r.get('directory_id') or r.get('source_id') or
                (r.get('company_name','').casefold(), r.get('discovery_source_url','')) for r in rows}
     summary = {'raw_records_supplied':len(rows), 'unique_website_domains':len(seen),
+               'sample_lock_verified':True, 'sample_lock':str(sample_lock),
                'decisions':dict(Counter(r['qualification'] for r in decisions)),
                'missing_reasons':dict(Counter(k for r in decisions for k in r['missing'])),
                'selected':len(selected), 'selected_mix':{'b2b':len(b2b),'local':len(local)},
@@ -370,7 +383,9 @@ def execute(source, day, db_path, output_dir, history_path=None, commit=False):
                'raw_pool_minimum_met':len(raw_ids)>=350,
                'history_coverage':'supplied_export_and_local_db' if history_path else 'local_db_only_incomplete',
                'outreach_sent':False, 'funnel':funnel_report(conn)}
-    output_dir=Path(output_dir);output_dir.mkdir(parents=True,exist_ok=True)
+    output_dir.mkdir(parents=True,exist_ok=True)
+    # decisions.json is the full final cohort; top20/top5 are P0 sales views only.
+    verify_final_ids(decisions, lock)
     for name,data in [('decisions',decisions),('top20',selected),('top5',selected[:5]),('summary',summary)]:
         (output_dir/(name+'.json')).write_text(json.dumps(data,ensure_ascii=False,indent=2))
     conn.close()

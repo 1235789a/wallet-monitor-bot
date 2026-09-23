@@ -106,6 +106,44 @@ The code does not guarantee replies, rankings, traffic, sales, or conversions. H
 
 ## Source-first raw company pools
 
+### Sample Lock for a buyer sprint
+
+After source-first discovery, run the sampler once per run directory. The first
+step writes `sampled-lock.json` with the seed, timestamp, requested limit,
+ordered IDs, source/identity keys, verticals, tracks and frozen RAW records.
+Reusing the same path with a different sample fails; use a new directory for a
+new run. Pass the same lock to every later step:
+
+```bash
+python research_buyer_batch.py --source runs/buyer-sprint/discovery/raw.json \
+  --sample-lock runs/buyer-sprint/sampled-lock.json \
+  --output runs/buyer-sprint/enriched.json \
+  --sampling-summary runs/buyer-sprint/sampling-summary.json
+python enrich_company_contacts.py runs/buyer-sprint/enriched.json \
+  --sample-lock runs/buyer-sprint/sampled-lock.json \
+  --output runs/buyer-sprint/contact-enriched.json
+# Gate each externally prepared JSON before passing it to the next stage;
+# repeat with --stage contact-discovery, audit and outreach where applicable.
+python prepare_locked_stage.py runs/buyer-sprint/buyer-query-draft.json \
+  --stage buyer-query --sample-lock runs/buyer-sprint/sampled-lock.json \
+  --output runs/buyer-sprint/buyer-query-locked.json
+# After human evidence and outreach preparation, the reviewed JSON must keep
+# all locked records and their immutable identity fields.
+python workflow1_daily.py runs/buyer-sprint/reviewed.json --date 2026-09-23 \
+  --mode buyer-intent --sample-lock runs/buyer-sprint/sampled-lock.json \
+  --output-dir outputs/buyer-intent --dry-run
+```
+
+The buyer-intent runner reads the lock before qualification, audits, funnel
+events or shortlist preparation. `decisions.json` is the full locked cohort in
+sample order; `top20.json` and `top5.json` are P0 views of that cohort. A
+missing row stays in `decisions.json` with `research_failed` and
+`contact_missing` status. Unlocked or spoofed company identities are written
+to `rejected-not-in-sample-lock.json` and fail the run before sales outputs.
+Each enriched/decision record and the summaries include
+`sample_lock_verified`. The generic source-pool builder remains a pre-sampling
+discovery tool, so it does not consume a lock.
+
 Build the company pool before doing any search or AI-visibility work. The native adapters implement
 the useful parts of the evaluated OSM lead-pool and website-contact projects without installing
 overlapping crawler applications as opaque runtime dependencies.
