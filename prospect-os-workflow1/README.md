@@ -112,7 +112,10 @@ After source-first discovery, run the sampler once per run directory. The first
 step writes `sampled-lock.json` with the seed, timestamp, requested limit,
 ordered IDs, source/identity keys, verticals, tracks and frozen RAW records.
 Reusing the same path with a different sample fails; use a new directory for a
-new run. Pass the same lock to every later step:
+new run. A rerun reads the frozen RAW records and original sampling summary
+from the lock even if discovery/raw.json changes. The enrichment output is
+written only after all locked company IDs pass the final check. Pass the same
+lock to every later step:
 
 ```bash
 python research_buyer_batch.py --source runs/buyer-sprint/discovery/raw.json \

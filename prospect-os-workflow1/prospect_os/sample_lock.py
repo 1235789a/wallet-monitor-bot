@@ -18,7 +18,8 @@ IDENTITY_FIELDS = ("source_id", "identity_key", "company_name", "sampling_vertic
 DRIFT_ERROR = "ERROR: downstream introduced unsampled companies"
 
 
-def make_lock(rows: list[dict[str, Any]], *, seed: int, limit: int) -> dict[str, Any]:
+def make_lock(rows: list[dict[str, Any]], *, seed: int, limit: int,
+              summary: dict[str, Any] | None = None) -> dict[str, Any]:
     samples = []
     for row in rows:
         item = {"id": sampling_record_key(row), **{field: row.get(field) for field in IDENTITY_FIELDS},
@@ -28,7 +29,8 @@ def make_lock(rows: list[dict[str, Any]], *, seed: int, limit: int) -> dict[str,
     if len(ids) != len(set(ids)):
         raise ValueError("sample contains duplicate company ids")
     return {"seed": seed, "generated_at": datetime.now(timezone.utc).isoformat(),
-            "limit": limit, "sample_ids": ids, "samples": samples}
+            "limit": limit, "sample_ids": ids, "samples": samples,
+            **({"sampling_summary": summary} if summary is not None else {})}
 
 
 def load_lock(path: Path) -> dict[str, Any]:
@@ -47,8 +49,9 @@ def load_lock(path: Path) -> dict[str, Any]:
     return lock
 
 
-def freeze_sample(path: Path, rows: list[dict[str, Any]], *, seed: int, limit: int) -> dict[str, Any]:
-    proposed = make_lock(rows, seed=seed, limit=limit)
+def freeze_sample(path: Path, rows: list[dict[str, Any]], *, seed: int, limit: int,
+                  summary: dict[str, Any] | None = None) -> dict[str, Any]:
+    proposed = make_lock(rows, seed=seed, limit=limit, summary=summary)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:

@@ -6,6 +6,7 @@ from pathlib import Path
 from prospect_os.buyer_intent import execute
 from prospect_os.sample_lock import align_to_lock, freeze_sample, load_lock, verify_final_ids
 from prospect_os.sampling import AI_B2B, WEB3, VAPE_TOBACCO, ALCOHOL_BAR, ADULT_RETAIL, stratified_sample
+from research_buyer_batch import run_batch
 
 
 class SampleLockTests(unittest.TestCase):
@@ -54,6 +55,37 @@ class SampleLockTests(unittest.TestCase):
             verify_final_ids(rows, lock)
             with self.assertRaisesRegex(ValueError, 'existing sample lock differs'):
                 freeze_sample(root / 'sampled-lock.json', list(reversed(sampled)), seed=20260907, limit=30)
+
+    def test_rerun_uses_frozen_raw_snapshot_and_keeps_failures(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            options = dict(limit=30, seed=1234, output=root/'enriched.json',
+                           summary_path=root/'sampling-summary.json',
+                           lock_path=root/'sampled-lock.json')
+            original, first = run_batch(self.pool(), **options,
+                enrich_fn=lambda r: {**r, 'research_status': 'website_fetch_failed',
+                                     'status': {'research_failed': True, 'contact_missing': True}})
+            self.assertEqual(len(original), 30)
+            self.assertTrue(first['sample_lock_verified'])
+            # An entirely different discovery pool cannot alter this run.
+            again, second = run_batch(self.pool()[-2:], **options,
+                enrich_fn=lambda r: self.fail('already researched rows must be reused'))
+            self.assertEqual(again, original)
+            self.assertEqual(first, second)
+            self.assertTrue(all(r['status']['research_failed'] for r in again))
+
+    def test_enrichment_cannot_swap_a_company(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root/'enriched.json'
+            with self.assertRaisesRegex(ValueError, 'downstream introduced unsampled companies'):
+                run_batch(self.pool(), limit=30, seed=1234, output=output,
+                          summary_path=root/'summary.json', lock_path=root/'sampled-lock.json',
+                          enrich_fn=lambda r: {**r, 'company_name': 'Swapped',
+                                               'research_status': 'pages_collected'})
+            self.assertFalse(output.exists())
+            rejected = json.loads((root/'rejected-not-in-sample-lock.json').read_text())
+            self.assertEqual(rejected[0]['status']['rejected_reason'], 'not_in_sample_lock')
 
 
 if __name__ == '__main__':

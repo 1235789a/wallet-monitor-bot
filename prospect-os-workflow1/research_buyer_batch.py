@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlsplit, parse_qs
 from workflow1_company_screening import TextAndLinksParser, fetch_html
 from workflow1_daily import normalize_domain
 from prospect_os.sampling import DEFAULT_SEED, sampling_record_key, stratified_sample
-from prospect_os.sample_lock import DEFAULT_LOCK, align_to_lock, freeze_sample, verify_final_ids
+from prospect_os.sample_lock import DEFAULT_LOCK, align_to_lock, freeze_sample, load_lock, verify_final_ids
 
 CACHE = Path('runs/buyer-sprint/pages')
 
@@ -73,6 +73,54 @@ def enrich(row):
     return row
 
 
+def run_batch(raw, *, limit, seed, output, summary_path, lock_path, enrich_fn=enrich):
+    output, summary_path, lock_path = Path(output), Path(summary_path), Path(lock_path)
+    if lock_path.exists():
+        lock = load_lock(lock_path)
+        if lock['seed'] != seed or lock['limit'] != limit:
+            raise ValueError('existing sample lock has different seed/limit; use a new run directory')
+        targets = [sample['record'] for sample in lock['samples']]
+        summary = lock.get('sampling_summary', {})
+    else:
+        targets, summary = stratified_sample(raw, limit=limit, seed=seed)
+        lock = freeze_sample(lock_path, targets, seed=seed, limit=limit, summary=summary)
+    targets = align_to_lock(targets, lock)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary.update(sample_lock_verified=True, sample_lock=str(lock_path))
+    previous = json.loads(output.read_text()) if output.exists() else []
+    previous = align_to_lock(previous, lock,
+                             rejected_path=output.with_name('rejected-not-in-sample-lock.json')) if previous else []
+    done = {sampling_record_key(r): r for r in previous if r.get('research_status')}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        fs = {ex.submit(enrich_fn, r): r for r in targets if sampling_record_key(r) not in done}
+        for f in as_completed(fs):
+            original = fs[f]
+            try:
+                r = f.result()
+            except Exception as exc:
+                r = {**original, 'research_status': 'research_failed',
+                     'status': {'research_failed': True, 'contact_missing': True},
+                     'research_error': str(exc)}
+            # Check each returned identity before it enters the cache, including
+            # a renamed company with an otherwise unchanged directory ID.
+            align_to_lock([r], {'samples': [item for item in lock['samples']
+                                              if item['id'] == sampling_record_key(original)],
+                                'sample_ids': [sampling_record_key(original)]},
+                          rejected_path=output.with_name('rejected-not-in-sample-lock.json'))
+            r['sample_lock_verified'] = True
+            done[sampling_record_key(original)] = r
+            print(json.dumps({'done': len(done), 'company': r['company_name'],
+                              'status': r['research_status'],
+                              'contact_candidates': len(r.get('contact_candidates', []))}), flush=True)
+    final = align_to_lock(list(done.values()), lock,
+                          rejected_path=output.with_name('rejected-not-in-sample-lock.json'))
+    verify_final_ids(final, lock)
+    output.write_text(json.dumps(final, ensure_ascii=False, indent=2))
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2))
+    return final, summary
+
+
 def main():
     a=argparse.ArgumentParser();a.add_argument('--limit',type=int,default=30)
     a.add_argument('--source',type=Path,default=Path('runs/buyer-sprint/discovery/raw.json'))
@@ -82,36 +130,11 @@ def main():
     a.add_argument('--seed',type=int,default=DEFAULT_SEED)
     args=a.parse_args()
     raw=json.loads(args.source.read_text())
-    targets, summary = stratified_sample(raw, limit=args.limit, seed=args.seed)
-    lock=freeze_sample(args.sample_lock, targets, seed=args.seed, limit=args.limit)
-    targets=align_to_lock(targets, lock)
     output=args.output
-    output.parent.mkdir(parents=True,exist_ok=True)
     summary_path=args.sampling_summary or output.with_name('sampling-summary.json')
-    summary_path.parent.mkdir(parents=True,exist_ok=True)
-    summary.update(sample_lock_verified=True, sample_lock=str(args.sample_lock))
-    previous=json.loads(output.read_text()) if output.exists() else []
-    previous=align_to_lock(previous,lock,rejected_path=output.with_name('rejected-not-in-sample-lock.json')) if previous else []
-    target_keys={sampling_record_key(r) for r in targets}
-    # Reject any old unstratified output instead of silently filtering drift.
-    # Resume cached enrichment only for identities in this lock.
-    done={sampling_record_key(r):r for r in previous if sampling_record_key(r) in target_keys and r.get('research_status')}
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        fs={ex.submit(enrich,r):r for r in targets if sampling_record_key(r) not in done}
-        for f in as_completed(fs):
-            try:
-                r=f.result()
-            except Exception as exc:
-                r={**fs[f], 'research_status':'research_failed',
-                   'status':{'research_failed':True,'contact_missing':True},
-                   'research_error':str(exc)}
-            r['sample_lock_verified']=True;done[sampling_record_key(r)]=r
-            output.write_text(json.dumps([done[sampling_record_key(t)] for t in targets if sampling_record_key(t) in done],ensure_ascii=False,indent=2))
-            print(json.dumps({'done':len(done),'company':r['company_name'],'status':r['research_status'],'contact_candidates':len(r.get('contact_candidates',[]))}),flush=True)
-    final=align_to_lock(list(done.values()),lock)
-    verify_final_ids(final,lock)
-    output.write_text(json.dumps(final,ensure_ascii=False,indent=2))
-    summary_path.write_text(json.dumps(summary,ensure_ascii=False,indent=2))
-    print(json.dumps({'raw':len(raw),'selected':len(targets),'enriched':len(done),'sampling_summary':str(summary_path)}))
+    final,_=run_batch(raw,limit=args.limit,seed=args.seed,output=output,
+                      summary_path=summary_path,lock_path=args.sample_lock)
+    print(json.dumps({'raw':len(raw),'selected':len(final),'enriched':len(final),
+                      'sampling_summary':str(summary_path),'sample_lock_verified':True}))
 
 if __name__=='__main__':main()
