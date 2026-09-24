@@ -418,22 +418,23 @@ def merge_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     for original in records:
         record = dict(original)
         key = str(record.get("identity_key") or identity_key(record))
-        if key not in merged:
-            record["source_memberships"] = [{
-                "source_id": record.get("source_id"),
-                "source_record_url": record.get("source_record_url"),
-                "raw_snapshot_sha256": record.get("raw_snapshot_sha256"),
-            }]
-            merged[key] = record
-            continue
-        target = merged[key]
-        membership = {
+        memberships = record.get("source_memberships") or [{
             "source_id": record.get("source_id"),
             "source_record_url": record.get("source_record_url"),
             "raw_snapshot_sha256": record.get("raw_snapshot_sha256"),
-        }
-        if membership not in target["source_memberships"]:
-            target["source_memberships"].append(membership)
+        }]
+        if key not in merged:
+            record["source_memberships"] = []
+            for membership in memberships:
+                if membership not in record["source_memberships"]:
+                    record["source_memberships"].append(membership)
+            record.setdefault("location_observations", [])
+            merged[key] = record
+            continue
+        target = merged[key]
+        for membership in memberships:
+            if membership not in target["source_memberships"]:
+                target["source_memberships"].append(membership)
         for location in record.get("location_observations", []):
             if location not in target["location_observations"]:
                 target["location_observations"].append(location)

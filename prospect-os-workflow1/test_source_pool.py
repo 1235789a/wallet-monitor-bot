@@ -53,6 +53,23 @@ class SourcePoolTests(unittest.TestCase):
         self.assertEqual(len(merged[0]["location_observations"]), 2)
         self.assertEqual(len(merged[0]["source_memberships"]), 2)
 
+    def test_remerge_preserves_prior_source_memberships(self) -> None:
+        records = parse_overpass({"elements": [
+            {"type": "node", "id": 1, "lat": 1.0, "lon": 2.0,
+             "tags": {"name": "Wine Shop", "shop": "wine", "website": "https://wine.example"}},
+            {"type": "node", "id": 2, "lat": 1.1, "lon": 2.1,
+             "tags": {"name": "Wine Shop", "shop": "wine", "website": "https://wine.example"}},
+        ]})
+        earlier = merge_records(records)
+        newer = {**records[0], "source_id": "second_snapshot:3"}
+        earlier[0].pop("location_observations")  # older RAW exports may omit this field
+        merged = merge_records(earlier + [newer])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual({item["source_id"] for item in merged[0]["source_memberships"]}, {
+            "openstreetmap:node/1", "openstreetmap:node/2", "second_snapshot:3",
+        })
+        self.assertEqual(len(merge_records(merged)[0]["source_memberships"]), 3)
+
     def test_tabular_import_rejects_search_discovery_channel(self) -> None:
         with self.assertRaisesRegex(ValueError, "approved off-search"):
             parse_csv_rows(
