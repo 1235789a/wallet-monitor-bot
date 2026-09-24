@@ -12,6 +12,7 @@ from workflow1_company_screening import TextAndLinksParser, fetch_html
 from workflow1_daily import normalize_domain
 from prospect_os.sampling import DEFAULT_SEED, sampling_record_key, stratified_sample
 from prospect_os.sample_lock import DEFAULT_LOCK, align_to_lock, freeze_sample, load_lock, verify_final_ids
+from prospect_os.history_exclusion import exclude_history
 
 CACHE = Path('runs/buyer-sprint/pages')
 
@@ -73,8 +74,10 @@ def enrich(row):
     return row
 
 
-def run_batch(raw, *, limit, seed, output, summary_path, lock_path, enrich_fn=enrich):
+def run_batch(raw, *, limit, seed, output, summary_path, lock_path, enrich_fn=enrich,
+              history_sources=(), excluded_path=None):
     output, summary_path, lock_path = Path(output), Path(summary_path), Path(lock_path)
+    excluded_path = Path(excluded_path) if excluded_path else output.with_name('excluded-history.json')
     if lock_path.exists():
         lock = load_lock(lock_path)
         if lock['seed'] != seed or lock['limit'] != limit:
@@ -82,7 +85,14 @@ def run_batch(raw, *, limit, seed, output, summary_path, lock_path, enrich_fn=en
         targets = [sample['record'] for sample in lock['samples']]
         summary = lock.get('sampling_summary', {})
     else:
-        targets, summary = stratified_sample(raw, limit=limit, seed=seed)
+        eligible, excluded = exclude_history(raw, history_sources)
+        targets, summary = stratified_sample(eligible, limit=limit, seed=seed)
+        summary.update(raw_pool=len(raw), history_excluded=len(excluded),
+                       eligible_after_history_filter=len(eligible), sampled=len(targets))
+        excluded_path.parent.mkdir(parents=True, exist_ok=True)
+        excluded_path.write_text(json.dumps(excluded, ensure_ascii=False, indent=2), encoding='utf-8')
+        if not targets:
+            raise ValueError('no eligible companies after history exclusion; sample lock not created')
         lock = freeze_sample(lock_path, targets, seed=seed, limit=limit, summary=summary)
     targets = align_to_lock(targets, lock)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -128,12 +138,24 @@ def main():
     a.add_argument('--sampling-summary',type=Path)
     a.add_argument('--sample-lock',type=Path,default=DEFAULT_LOCK)
     a.add_argument('--seed',type=int,default=DEFAULT_SEED)
+    a.add_argument('--history-used',type=Path,action='append',default=[],
+                   help='JSON used-company list; repeat for multiple exports')
+    a.add_argument('--previous-contacted',type=Path,action='append',default=[],
+                   help='JSON previously contacted company records')
+    a.add_argument('--previous-sample-lock',type=Path,action='append',default=[],
+                   help='Prior sampled-lock.json; repeat for each earlier run')
+    a.add_argument('--excluded-history',type=Path,
+                   help='Audit log; defaults to excluded-history.json next to enriched.json')
     args=a.parse_args()
     raw=json.loads(args.source.read_text())
     output=args.output
     summary_path=args.sampling_summary or output.with_name('sampling-summary.json')
     final,_=run_batch(raw,limit=args.limit,seed=args.seed,output=output,
-                      summary_path=summary_path,lock_path=args.sample_lock)
+                      summary_path=summary_path,lock_path=args.sample_lock,
+                      history_sources=[('history_used',p) for p in args.history_used]
+                                    +[('previous_contacted',p) for p in args.previous_contacted]
+                                    +[('previous_sample_lock',p) for p in args.previous_sample_lock],
+                      excluded_path=args.excluded_history)
     print(json.dumps({'raw':len(raw),'selected':len(final),'enriched':len(final),
                       'sampling_summary':str(summary_path),'sample_lock_verified':True}))
 

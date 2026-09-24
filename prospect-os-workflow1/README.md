@@ -108,7 +108,15 @@ The code does not guarantee replies, rankings, traffic, sales, or conversions. H
 
 ### Sample Lock for a buyer sprint
 
-After source-first discovery, run the sampler once per run directory. The first
+After source-first discovery, supply the previous used-company and contacted
+JSON exports plus prior sample locks before the first run. History exclusion
+matches `identity_key`, `source_id`, normalized website domain and a normalized
+company-name SHA-256. The excluded RAW rows are listed in
+`excluded-history.json` with the matched history file and reason. The sampler
+only receives the remaining eligible records. Missing or malformed supplied
+history inputs stop the run before a lock is created.
+
+Run the sampler once per run directory. The first
 step writes `sampled-lock.json` with the seed, timestamp, requested limit,
 ordered IDs, source/identity keys, verticals, tracks and frozen RAW records.
 Reusing the same path with a different sample fails; use a new directory for a
@@ -119,6 +127,9 @@ lock to every later step:
 
 ```bash
 python research_buyer_batch.py --source runs/buyer-sprint/discovery/raw.json \
+  --history-used runs/history/used-companies.json \
+  --previous-contacted runs/history/contacted.json \
+  --previous-sample-lock runs/previous-sprint/sampled-lock.json \
   --sample-lock runs/buyer-sprint/sampled-lock.json \
   --output runs/buyer-sprint/enriched.json \
   --sampling-summary runs/buyer-sprint/sampling-summary.json
@@ -136,6 +147,12 @@ python workflow1_daily.py runs/buyer-sprint/reviewed.json --date 2026-09-23 \
   --mode buyer-intent --sample-lock runs/buyer-sprint/sampled-lock.json \
   --output-dir outputs/buyer-intent --dry-run
 ```
+
+Each history flag may be repeated for multiple files. The four counts
+`raw_pool`, `history_excluded`, `eligible_after_history_filter` and `sampled`
+are saved in `sampling-summary.json`. History is checked when a new sample is
+created; rerunning an existing lock preserves that run's original exclusions
+and sample. Start a new run directory to apply newly added history sources.
 
 The buyer-intent runner reads the lock before qualification, audits, funnel
 events or shortlist preparation. `decisions.json` is the full locked cohort in

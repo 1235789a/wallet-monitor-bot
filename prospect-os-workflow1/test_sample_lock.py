@@ -2,11 +2,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from prospect_os.buyer_intent import execute
 from prospect_os.sample_lock import align_to_lock, freeze_sample, load_lock, verify_final_ids
 from prospect_os.sampling import AI_B2B, WEB3, VAPE_TOBACCO, ALCOHOL_BAR, ADULT_RETAIL, stratified_sample
 from research_buyer_batch import run_batch
+from prospect_os.history_exclusion import _name_hash
 
 
 class SampleLockTests(unittest.TestCase):
@@ -86,6 +88,76 @@ class SampleLockTests(unittest.TestCase):
             self.assertFalse(output.exists())
             rejected = json.loads((root/'rejected-not-in-sample-lock.json').read_text())
             self.assertEqual(rejected[0]['status']['rejected_reason'], 'not_in_sample_lock')
+
+    def test_history_is_excluded_before_sampler_and_stays_out_of_lock(self):
+        raw = self.pool()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            used = root/'used.json'
+            used.write_text(json.dumps([{'identity_key':raw[0]['identity_key']},
+                                        {'source_id':raw[1]['source_id']},
+                                        {'company_name_hash':_name_hash(raw[3]['company_name'])}]))
+            contacted = root/'contacted.json'
+            contacted.write_text(json.dumps({'records':[
+                {'website_url':raw[2]['website_url'].replace('https://', 'https://www.').upper()}]}))
+            prior = root/'previous-lock.json'
+            freeze_sample(prior, [raw[4]], seed=11, limit=1)
+            history = [('history_used',used), ('previous_contacted',contacted),
+                       ('previous_sample_lock',prior)]
+            options = dict(limit=30,seed=1234,output=root/'enriched.json',
+                           summary_path=root/'sampling-summary.json',
+                           lock_path=root/'sampled-lock.json',history_sources=history)
+            sampler = stratified_sample
+            def checked_sample(records, **kwargs):
+                self.assertEqual(len(records),len(raw)-5)
+                self.assertTrue(all(r not in records for r in raw[:5]))
+                return sampler(records, **kwargs)
+            with patch('research_buyer_batch.stratified_sample',side_effect=checked_sample):
+                rows, summary = run_batch(raw, **options,
+                    enrich_fn=lambda r:{**r,'research_status':'website_fetch_failed'})
+            lock = load_lock(options['lock_path'])
+            self.assertEqual(len(rows),30)
+            self.assertEqual({key:summary[key] for key in ('raw_pool','history_excluded',
+                'eligible_after_history_filter','sampled')},
+                {'raw_pool':len(raw),'history_excluded':5,
+                 'eligible_after_history_filter':len(raw)-5,'sampled':30})
+            self.assertEqual(summary,json.loads(options['summary_path'].read_text()))
+            self.assertEqual(len(json.loads((root/'excluded-history.json').read_text())),5)
+            exclusions=json.loads((root/'excluded-history.json').read_text())
+            self.assertEqual([r['exclusion_reason'] for r in exclusions],
+                             ['identity_key','source_id','normalized_domain',
+                              'company_name_hash','identity_key'])
+            self.assertEqual(exclusions[-1]['matched_history_source'],f'previous_sample_lock:{prior}')
+            self.assertTrue(all(x['company_name'] not in {r['company_name'] for r in raw[:5]}
+                                for x in lock['samples']))
+            previous_report=(root/'excluded-history.json').read_text()
+            again, rerun_summary=run_batch(raw[-2:], **options,
+                enrich_fn=lambda r:self.fail('completed rows must be reused'))
+            self.assertEqual(again,rows)
+            self.assertEqual(rerun_summary,summary)
+            self.assertEqual((root/'excluded-history.json').read_text(),previous_report)
+
+    def test_unreadable_history_stops_before_lock_creation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            with self.assertRaises(FileNotFoundError):
+                run_batch(self.pool(),limit=30,seed=1,output=root/'enriched.json',
+                          summary_path=root/'summary.json',lock_path=root/'sampled-lock.json',
+                          history_sources=[('history_used',root/'missing.json')])
+            self.assertFalse((root/'sampled-lock.json').exists())
+
+    def test_all_historical_companies_cannot_form_empty_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = self.pool()[:2]
+            used = root/'used.json'
+            used.write_text(json.dumps(raw))
+            with self.assertRaisesRegex(ValueError, 'no eligible companies'):
+                run_batch(raw, limit=2, seed=1, output=root/'enriched.json',
+                          summary_path=root/'summary.json', lock_path=root/'sampled-lock.json',
+                          history_sources=[('history_used',used)])
+            self.assertEqual(len(json.loads((root/'excluded-history.json').read_text())),2)
+            self.assertFalse((root/'sampled-lock.json').exists())
 
 
 if __name__ == '__main__':
