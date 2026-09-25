@@ -63,7 +63,7 @@ class SampleLockTests(unittest.TestCase):
             root = Path(temp)
             options = dict(limit=30, seed=1234, output=root/'enriched.json',
                            summary_path=root/'sampling-summary.json',
-                           lock_path=root/'sampled-lock.json')
+                           lock_path=root/'sampled-lock.json', pool_mode='legacy')
             original, first = run_batch(self.pool(), **options,
                 enrich_fn=lambda r: {**r, 'research_status': 'website_fetch_failed',
                                      'status': {'research_failed': True, 'contact_missing': True}})
@@ -83,6 +83,7 @@ class SampleLockTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'downstream introduced unsampled companies'):
                 run_batch(self.pool(), limit=30, seed=1234, output=output,
                           summary_path=root/'summary.json', lock_path=root/'sampled-lock.json',
+                          pool_mode='legacy',
                           enrich_fn=lambda r: {**r, 'company_name': 'Swapped',
                                                'research_status': 'pages_collected'})
             self.assertFalse(output.exists())
@@ -106,7 +107,8 @@ class SampleLockTests(unittest.TestCase):
                        ('previous_sample_lock',prior)]
             options = dict(limit=30,seed=1234,output=root/'enriched.json',
                            summary_path=root/'sampling-summary.json',
-                           lock_path=root/'sampled-lock.json',history_sources=history)
+                           lock_path=root/'sampled-lock.json',history_sources=history,
+                           pool_mode='legacy')
             sampler = stratified_sample
             def checked_sample(records, **kwargs):
                 self.assertEqual(len(records),len(raw)-5)
@@ -143,7 +145,7 @@ class SampleLockTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 run_batch(self.pool(),limit=30,seed=1,output=root/'enriched.json',
                           summary_path=root/'summary.json',lock_path=root/'sampled-lock.json',
-                          history_sources=[('history_used',root/'missing.json')])
+                          history_sources=[('history_used',root/'missing.json')],pool_mode='legacy')
             self.assertFalse((root/'sampled-lock.json').exists())
 
     def test_all_historical_companies_cannot_form_empty_lock(self):
@@ -155,7 +157,7 @@ class SampleLockTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'no eligible companies'):
                 run_batch(raw, limit=2, seed=1, output=root/'enriched.json',
                           summary_path=root/'summary.json', lock_path=root/'sampled-lock.json',
-                          history_sources=[('history_used',used)])
+                          history_sources=[('history_used',used)],pool_mode='legacy')
             self.assertEqual(len(json.loads((root/'excluded-history.json').read_text())),2)
             self.assertFalse((root/'sampled-lock.json').exists())
 

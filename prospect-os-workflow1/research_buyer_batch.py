@@ -13,6 +13,7 @@ from workflow1_daily import normalize_domain
 from prospect_os.sampling import DEFAULT_SEED, sampling_record_key, stratified_sample
 from prospect_os.sample_lock import DEFAULT_LOCK, align_to_lock, freeze_sample, load_lock, verify_final_ids
 from prospect_os.history_exclusion import exclude_history
+from prospect_os.contact_pools import screen_raw_pool
 
 CACHE = Path('runs/buyer-sprint/pages')
 
@@ -75,8 +76,12 @@ def enrich(row):
 
 
 def run_batch(raw, *, limit, seed, output, summary_path, lock_path, enrich_fn=enrich,
-              history_sources=(), excluded_path=None):
+              history_sources=(), excluded_path=None, pool_mode='contact_first',
+              screen_fn=None, min_whatsapp=24, telegram_cap=6, refresh_screen=False,
+              allow_shortfall_lock=False):
     output, summary_path, lock_path = Path(output), Path(summary_path), Path(lock_path)
+    if min_whatsapp < 0 or telegram_cap < 0:
+        raise ValueError('contact targets must be nonnegative')
     excluded_path = Path(excluded_path) if excluded_path else output.with_name('excluded-history.json')
     if lock_path.exists():
         lock = load_lock(lock_path)
@@ -86,13 +91,45 @@ def run_batch(raw, *, limit, seed, output, summary_path, lock_path, enrich_fn=en
         summary = lock.get('sampling_summary', {})
     else:
         eligible, excluded = exclude_history(raw, history_sources)
-        targets, summary = stratified_sample(eligible, limit=limit, seed=seed)
+        pool_summary = {}
+        if pool_mode == 'contact_first':
+            pools = screen_raw_pool(eligible, cache_path=output.with_name('prelock-screen.jsonl'),
+                                    screen_fn=screen_fn, refresh=refresh_screen)
+            for name, rows in pools.items():
+                output.with_name(f'prelock-{name}.json').parent.mkdir(parents=True, exist_ok=True)
+                output.with_name(f'prelock-{name}.json').write_text(
+                    json.dumps(rows, ensure_ascii=False, indent=2), encoding='utf-8')
+            eligible_for_sample = pools['chat']
+            pool_summary = {'pool_counts': {name: len(rows) for name, rows in pools.items()},
+                            'email_pool_requires_explicit_quality_review': True,
+                            'whatsapp_target': min(min_whatsapp, limit),
+                            'telegram_cap': telegram_cap}
+            targets, summary = stratified_sample(eligible_for_sample, limit=limit, seed=seed,
+                                                  prefer_whatsapp=True, telegram_cap=telegram_cap)
+            wa_count = sum(row.get('prelock_channel') == 'whatsapp' for row in targets)
+            pool_summary['whatsapp_selected'] = wa_count
+            pool_summary['whatsapp_shortfall'] = max(0, min(min_whatsapp, limit) - wa_count)
+            pool_summary['quality_reviewed_selected'] = sum(
+                row.get('prelock_quality_reviewed') is True for row in targets)
+            pool_summary['outreach_ready'] = False
+        elif pool_mode == 'legacy':
+            targets, summary = stratified_sample(eligible, limit=limit, seed=seed)
+        else:
+            raise ValueError(f'unknown pool mode: {pool_mode}')
+        summary.update(pool_summary)
         summary.update(raw_pool=len(raw), history_excluded=len(excluded),
                        eligible_after_history_filter=len(eligible), sampled=len(targets))
         excluded_path.parent.mkdir(parents=True, exist_ok=True)
         excluded_path.write_text(json.dumps(excluded, ensure_ascii=False, indent=2), encoding='utf-8')
+        if pool_mode == 'contact_first' and not allow_shortfall_lock and (
+                len(targets) < limit or pool_summary['whatsapp_shortfall']):
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
+            raise ValueError(f'contact pool shortfall: {len(targets)}/{limit} chat candidates, '
+                             f'{pool_summary["whatsapp_selected"]}/{pool_summary["whatsapp_target"]} '
+                             'WhatsApp; expand RAW sources or use --allow-shortfall-lock for exploration')
         if not targets:
-            raise ValueError('no eligible companies after history exclusion; sample lock not created')
+            raise ValueError('no eligible companies with chat routes after history exclusion and contact screening; sample lock not created')
         lock = freeze_sample(lock_path, targets, seed=seed, limit=limit, summary=summary)
     targets = align_to_lock(targets, lock)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -138,6 +175,13 @@ def main():
     a.add_argument('--sampling-summary',type=Path)
     a.add_argument('--sample-lock',type=Path,default=DEFAULT_LOCK)
     a.add_argument('--seed',type=int,default=DEFAULT_SEED)
+    a.add_argument('--pool-mode',choices=('contact_first','legacy'),default='contact_first')
+    a.add_argument('--min-whatsapp',type=int,default=24)
+    a.add_argument('--telegram-cap',type=int,default=6)
+    a.add_argument('--refresh-prelock',action='store_true',
+                   help='Recheck source websites when creating a new lock; existing locks are immutable')
+    a.add_argument('--allow-shortfall-lock',action='store_true',
+                   help='Exploratory run only: freeze fewer chat/WhatsApp records than requested')
     a.add_argument('--history-used',type=Path,action='append',default=[],
                    help='JSON used-company list; repeat for multiple exports')
     a.add_argument('--previous-contacted',type=Path,action='append',default=[],
@@ -152,6 +196,9 @@ def main():
     summary_path=args.sampling_summary or output.with_name('sampling-summary.json')
     final,_=run_batch(raw,limit=args.limit,seed=args.seed,output=output,
                       summary_path=summary_path,lock_path=args.sample_lock,
+                      pool_mode=args.pool_mode,min_whatsapp=args.min_whatsapp,
+                      telegram_cap=args.telegram_cap,refresh_screen=args.refresh_prelock,
+                      allow_shortfall_lock=args.allow_shortfall_lock,
                       history_sources=[('history_used',p) for p in args.history_used]
                                     +[('previous_contacted',p) for p in args.previous_contacted]
                                     +[('previous_sample_lock',p) for p in args.previous_sample_lock],

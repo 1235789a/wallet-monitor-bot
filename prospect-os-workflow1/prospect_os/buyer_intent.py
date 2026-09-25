@@ -46,7 +46,7 @@ def contact_key(c):
         return channel + ':' + value.casefold()
     if channel in {'whatsapp', 'telegram', 'founder_social'} and public_url(value):
         h = normalize_domain(value)
-        if channel == 'whatsapp' and h not in {'wa.me', 'api.whatsapp.com', 'web.whatsapp.com'}:
+        if channel == 'whatsapp' and h not in {'wa.me', 'api.whatsapp.com', 'web.whatsapp.com', 'whatsapp.com'}:
             return ''
         if channel == 'telegram' and h not in {'t.me', 'telegram.me'}:
             return ''

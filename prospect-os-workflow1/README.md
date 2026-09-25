@@ -106,14 +106,53 @@ The code does not guarantee replies, rankings, traffic, sales, or conversions. H
 
 ## Source-first raw company pools
 
+### Contact-first dual pools (default for new runs)
+
+The 1,000+ RAW records are a discovery pool, not the final prospect list. A new
+run excludes history, checks the supplied company websites for explicit contact
+routes (home and up to one contact/about page), then writes four **pre-lock**
+files beside `enriched.json`:
+
+- `prelock-chat.json`: official website links to WhatsApp or Telegram. WhatsApp
+  is preferred; Telegram is capped at six among a 30-company sample. A company
+  chat link does not establish decision-maker ownership.
+- `prelock-email.json`: email-only candidates **with an explicit human quality
+  review**. This pool never fills chat quotas and is not sent automatically.
+- `prelock-email_review.json`: email-only candidates awaiting the quality review.
+- `prelock-review.json`: no verified chat/email route, unavailable website,
+  secondary vertical or another preliminary exclusion.
+
+For an email-only record to enter the quality-reviewed email pool, supply
+`prelock_quality_review: {"reviewed": true, "rating": "high", "claim": "...",
+"source_url": "https://..."}` in its RAW record. A title or score alone is not
+proof. The pre-lock website checks resume from `prelock-screen.jsonl`; use
+`--refresh-prelock` in a **new run directory** to revisit changed websites.
+These are route candidates, not P0 sales qualifications: the existing owner,
+activity, buyer-query, competitor and first-fix gates still apply afterward.
+
+The sampler sees only `prelock-chat.json`. A 30-record sample aims for at least
+24 website-linked WhatsApp routes and at most six Telegram routes while keeping
+the 15/15 Track split and city cap. If fewer qualifying routes exist, the
+shortfall appears in `sampling-summary.json`; email does not silently substitute
+for chat. By default, a shortfall writes the pre-lock files and summary but
+does not freeze a partial sample. Add more eligible RAW records and rerun, or
+use `--allow-shortfall-lock` for an explicitly exploratory partial lock.
+Never call a phone number WhatsApp without an explicit link. No bulk
+email tool or automatic message sending is part of this workflow.
+
+Use `--pool-mode legacy` only to replay the older RAW-first selection procedure
+with a **new** lock path. An existing lock always replays its original frozen
+cohort, regardless of changes to RAW, history files or contact screening.
+
 ### Sample Lock for a buyer sprint
 
 After source-first discovery, supply the previous used-company and contacted
 JSON exports plus prior sample locks before the first run. History exclusion
 matches `identity_key`, `source_id`, normalized website domain and a normalized
 company-name SHA-256. The excluded RAW rows are listed in
-`excluded-history.json` with the matched history file and reason. The sampler
-only receives the remaining eligible records. Missing or malformed supplied
+`excluded-history.json` with the matched history file and reason. Contact-first
+screening then separates the remaining eligible records into the chat and email
+pools before sampling. Missing or malformed supplied
 history inputs stop the run before a lock is created.
 
 Run the sampler once per run directory. The first

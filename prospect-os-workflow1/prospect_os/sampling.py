@@ -211,6 +211,9 @@ def _pick(
     source_counts: Counter[str],
     city_cap: int,
     source_cap: int | None,
+    prefer_whatsapp: bool = False,
+    telegram_counts: Counter[str] | None = None,
+    telegram_cap: int | None = None,
 ) -> list[dict[str, Any]]:
     chosen: list[dict[str, Any]] = []
     remaining = [row for row in candidates if _record_key(row) not in selected_keys]
@@ -219,10 +222,14 @@ def _pick(
             row for row in remaining
             if city_counts[_city_key(row)] < city_cap
             and (source_cap is None or source_counts[_source_key(row)] < source_cap)
+            and (telegram_cap is None or row.get('prelock_channel') != 'telegram'
+                 or telegram_counts['telegram'] < telegram_cap)
         ]
         if not allowed:
             break
         row = min(allowed, key=lambda item: (
+            0 if not prefer_whatsapp or item.get('prelock_quality_reviewed') else 1,
+            0 if not prefer_whatsapp or item.get('prelock_channel') == 'whatsapp' else 1,
             source_counts[_source_key(item)],
             city_counts[_city_key(item)],
             _random_rank(item, seed, salt),
@@ -232,6 +239,8 @@ def _pick(
         selected_keys.add(key)
         city_counts[_city_key(row)] += 1
         source_counts[_source_key(row)] += 1
+        if telegram_counts is not None and row.get('prelock_channel') == 'telegram':
+            telegram_counts['telegram'] += 1
         chosen.append(row)
         remaining = [item for item in remaining if _record_key(item) != key]
     return chosen
@@ -263,6 +272,8 @@ def stratified_sample(
     seed: int = DEFAULT_SEED,
     city_cap: int = DEFAULT_CITY_CAP,
     source_share: float = DEFAULT_SOURCE_SHARE,
+    prefer_whatsapp: bool = False,
+    telegram_cap: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return a reproducible Track-isolated sample plus its audit summary."""
     if limit <= 0:
@@ -283,6 +294,7 @@ def stratified_sample(
     selected_keys: set[str] = set()
     city_counts: Counter[str] = Counter()
     all_source_counts: Counter[str] = Counter()
+    telegram_counts: Counter[str] = Counter()
 
     for track, verticals in (("track_a", TRACK_A_VERTICALS), ("track_b", TRACK_B_VERTICALS)):
         track_source_counts: Counter[str] = Counter()
@@ -298,6 +310,8 @@ def stratified_sample(
                 selected_keys=selected_keys, city_counts=city_counts,
                 source_counts=track_source_counts, city_cap=city_cap,
                 source_cap=source_cap,
+                prefer_whatsapp=prefer_whatsapp, telegram_counts=telegram_counts,
+                telegram_cap=telegram_cap,
             )
             if len(picked) < need:
                 picked += _pick(
@@ -305,6 +319,8 @@ def stratified_sample(
                     selected_keys=selected_keys, city_counts=city_counts,
                     source_counts=track_source_counts, city_cap=city_cap,
                     source_cap=None,
+                    prefer_whatsapp=prefer_whatsapp, telegram_counts=telegram_counts,
+                    telegram_cap=telegram_cap,
                 )
             selected.extend(picked)
 
@@ -321,6 +337,8 @@ def stratified_sample(
                 selected_keys=selected_keys, city_counts=city_counts,
                 source_counts=track_source_counts, city_cap=city_cap,
                 source_cap=source_cap,
+                prefer_whatsapp=prefer_whatsapp, telegram_counts=telegram_counts,
+                telegram_cap=telegram_cap,
             )
             if len(picked) < need:
                 picked += _pick(
@@ -328,6 +346,8 @@ def stratified_sample(
                     selected_keys=selected_keys, city_counts=city_counts,
                     source_counts=track_source_counts, city_cap=city_cap,
                     source_cap=None,
+                    prefer_whatsapp=prefer_whatsapp, telegram_counts=telegram_counts,
+                    telegram_cap=telegram_cap,
                 )
             selected.extend(picked)
 
@@ -365,6 +385,8 @@ def stratified_sample(
             }
             for source, count in sorted(all_source_counts.items())
         },
+        "selected_by_contact_channel": dict(Counter(row.get('prelock_channel', 'unknown') for row in selected)),
+        "telegram_cap": telegram_cap,
     }
     return selected, summary
 
