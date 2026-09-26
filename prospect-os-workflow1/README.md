@@ -1,6 +1,35 @@
-# Prospect OS Workflow 1 — Final v4
+# Prospect OS Workflow 1 — Buyer-Intent Sprint
 
-This folder is a portable snapshot of the current Web3-only Prospect OS workflow. It is intentionally isolated from the host application's existing files.
+The default runner now prioritizes paid-prospect evidence rather than contact volume. It preserves
+the existing company-first discovery, verification and deduplication foundation while adding a
+strict buyer-intent mode. The current operating rules are in
+[system/buyer-intent-sprint.md](system/buyer-intent-sprint.md).
+
+The first production mix is fixed at **10 high-ticket B2B + 10 independent local businesses**.
+Neither side may fill the other side's shortfall. WhatsApp, Telegram, email and verified founder
+social profiles are valid routes; no channel quota is a success metric.
+
+Buyer-intent mode requires 5–10 human-reviewed non-brand buyer queries and at least five actually
+tested query comparisons before P0. Every comparison records the platform, date, returned URLs,
+prospect presence and competitors. Search results and third-party directories are never labelled
+as ChatGPT, Gemini or Perplexity recommendations.
+
+```bash
+python workflow1_daily.py runs/reviewed-prospects.json --date 2026-09-10 \
+  --mode buyer-intent --db data/prospects.db --output-dir outputs/buyer-intent --dry-run
+python -m unittest discover -v
+```
+
+Dry-run uses an in-memory database and does not mutate the supplied database. Remove `--dry-run`
+only after human review of evidence and contact routes.
+
+This folder is the portable Prospect OS workflow. Buyer-intent mode supports the fixed B2B/local
+split; the older Web3-only path remains available as legacy compatibility code. It is intentionally
+isolated from the host application's existing files.
+
+The lawful tobacco/alcohol prospect track is a separate, evidence-first
+module. It does not change the Web3-only daily runner and does not send
+outreach. See [system/tobacco-alcohol-track.md](system/tobacco-alcohol-track.md).
 
 ## Operating sequence
 
@@ -18,7 +47,10 @@ Google, Bing, SEO result pages, and AI search are diagnostic sources only. Every
 
 Search-only discovery channels are rejected, and the discovery source must be public and on a different domain from the company website. The full hard gate and quarantine behavior are documented in [system/off-search-discovery-policy.md](system/off-search-discovery-policy.md).
 
-## Current P0 rules
+## Legacy v4 P0 rules
+
+The rules below document `--mode legacy`; they are retained for compatibility and are no longer
+the default buyer-intent qualification path.
 
 - Web3 only; handmade and regulated/high-risk categories stay excluded.
 - Owner-operated or independent small businesses only. Chains, franchises, branded branches, unknown ownership, and businesses with 3+ locations are rejected in code.
@@ -28,6 +60,23 @@ Search-only discovery channels are rejected, and the discovery source must be pu
 - Ranking priority is reply probability → decision-maker access → real business quality → partnership openness → GEO/search gap.
 - `Not found` Reply Behaviour is capped at 12/30 and `Inaccessible` is inferred only; neither can enter P0.
 - No automatic outreach, publishing, or database mutation from the research step.
+
+## Lawful tobacco/alcohol track
+
+Run the independent track against records that were discovered from a structured
+off-search source and then enriched with verification evidence:
+
+```bash
+python workflow1_tobacco_alcohol.py runs/tobacco-alcohol-records.json \
+  --date 2026-08-30 --requested 16 --output outputs/tobacco-alcohol-review.json
+python -m unittest test_tobacco_alcohol_track.py
+```
+
+This track quarantines search-engine discovery, high-risk categories, chains,
+franchises, and businesses with more than two locations. It keeps incomplete
+records in `REVIEW_REQUIRED`, reports any quota shortfall, distinguishes USDT
+from Bitcoin/XBT/Lightning, and requires observed public reply behaviour before
+marking a record `READY_FOR_REPLY_TEST`.
 
 ## Run locally
 
@@ -44,10 +93,144 @@ The runner accepts `--db` and `--vault` overrides and can initialize a fresh com
 
 - `workflow1_daily.py`: validation, scoring, dedupe, import and report generation.
 - `workflow1_company_screening.py`: company-first raw-pool screening, website audit, 1–2-location/no-chain hard gate, and CSV/JSON/Markdown export.
+- `workflow1_tobacco_alcohol.py` and `prospect_os/tobacco_alcohol_track.py`: isolated lawful tobacco/alcohol track with source provenance, business/entity/activity/contact gates, payment-state separation, reply-behaviour gate, and no quota filling.
+- `intent_signal_cli.py` and `prospect_os/intent_signals.py`: read-only adapters for Agent-Reach, Chatwoot, Mautic, PostHog, n8n, and the wallet monitor. They score public activity, direct replies, owned-site buying signals, and actual payment separately; they never send outreach.
 - `workflow1_source_audit.py` and `prospect_os/source_tools.py`: read-only source auditing.
 - `system/daily-task-prompt.md`: current operating prompt.
 - `system/off-search-discovery-policy.md`: mandatory discovery provenance and same-domain quarantine rules.
 - `system/source-audit-setup.md`: audit setup and limitations.
-- `test_workflow1_v2.py`: safe fixture tests, including rejection of search-only discovery.
+- `test_workflow1_v2.py` and `test_tobacco_alcohol_track.py`: safe fixture tests, including rejection of search-only discovery and the tobacco/alcohol hard gates.
+- `test_intent_signals.py`: tests that public activity cannot be upgraded to a direct reply, page behaviour cannot be upgraded to a payment, and unknown external events are discarded.
 
 The code does not guarantee replies, rankings, traffic, sales, or conversions. Human review remains required before any message is sent.
+
+## Source-first raw company pools
+
+### Contact-first dual pools (default for new runs)
+
+The 1,000+ RAW records are a discovery pool, not the final prospect list. A new
+run excludes history, checks the supplied company websites for explicit contact
+routes (home and up to one contact/about page), then writes four **pre-lock**
+files beside `enriched.json`:
+
+- `prelock-chat.json`: official website links to WhatsApp or Telegram. WhatsApp
+  is preferred; Telegram is capped at six among a 30-company sample. A company
+  chat link does not establish decision-maker ownership.
+- `prelock-email.json`: email-only candidates **with an explicit human quality
+  review**. This pool never fills chat quotas and is not sent automatically.
+- `prelock-email_review.json`: email-only candidates awaiting the quality review.
+- `prelock-review.json`: no verified chat/email route, unavailable website,
+  secondary vertical or another preliminary exclusion.
+
+For an email-only record to enter the quality-reviewed email pool, supply
+`prelock_quality_review: {"reviewed": true, "rating": "high", "claim": "...",
+"source_url": "https://..."}` in its RAW record. A title or score alone is not
+proof. The pre-lock website checks resume from `prelock-screen.jsonl`; use
+`--refresh-prelock` in a **new run directory** to revisit changed websites.
+These are route candidates, not P0 sales qualifications: the existing owner,
+activity, buyer-query, competitor and first-fix gates still apply afterward.
+
+The sampler sees only `prelock-chat.json`. A 30-record sample aims for at least
+24 website-linked WhatsApp routes and at most six Telegram routes while keeping
+the 15/15 Track split and city cap. If fewer qualifying routes exist, the
+shortfall appears in `sampling-summary.json`; email does not silently substitute
+for chat. By default, a shortfall writes the pre-lock files and summary but
+does not freeze a partial sample. Add more eligible RAW records and rerun, or
+use `--allow-shortfall-lock` for an explicitly exploratory partial lock.
+Never call a phone number WhatsApp without an explicit link. No bulk
+email tool or automatic message sending is part of this workflow.
+
+Use `--pool-mode legacy` only to replay the older RAW-first selection procedure
+with a **new** lock path. An existing lock always replays its original frozen
+cohort, regardless of changes to RAW, history files or contact screening.
+
+### Sample Lock for a buyer sprint
+
+After source-first discovery, supply the previous used-company and contacted
+JSON exports plus prior sample locks before the first run. History exclusion
+matches `identity_key`, `source_id`, normalized website domain and a normalized
+company-name SHA-256. The excluded RAW rows are listed in
+`excluded-history.json` with the matched history file and reason. Contact-first
+screening then separates the remaining eligible records into the chat and email
+pools before sampling. Missing or malformed supplied
+history inputs stop the run before a lock is created.
+
+Run the sampler once per run directory. The first
+step writes `sampled-lock.json` with the seed, timestamp, requested limit,
+ordered IDs, source/identity keys, verticals, tracks and frozen RAW records.
+Reusing the same path with a different sample fails; use a new directory for a
+new run. A rerun reads the frozen RAW records and original sampling summary
+from the lock even if discovery/raw.json changes. The enrichment output is
+written only after all locked company IDs pass the final check. Pass the same
+lock to every later step:
+
+```bash
+python research_buyer_batch.py --source runs/buyer-sprint/discovery/raw.json \
+  --history-used runs/history/used-companies.json \
+  --previous-contacted runs/history/contacted.json \
+  --previous-sample-lock runs/previous-sprint/sampled-lock.json \
+  --sample-lock runs/buyer-sprint/sampled-lock.json \
+  --output runs/buyer-sprint/enriched.json \
+  --sampling-summary runs/buyer-sprint/sampling-summary.json
+python enrich_company_contacts.py runs/buyer-sprint/enriched.json \
+  --sample-lock runs/buyer-sprint/sampled-lock.json \
+  --output runs/buyer-sprint/contact-enriched.json
+# Gate each externally prepared JSON before passing it to the next stage;
+# repeat with --stage contact-discovery, audit and outreach where applicable.
+python prepare_locked_stage.py runs/buyer-sprint/buyer-query-draft.json \
+  --stage buyer-query --sample-lock runs/buyer-sprint/sampled-lock.json \
+  --output runs/buyer-sprint/buyer-query-locked.json
+# After human evidence and outreach preparation, the reviewed JSON must keep
+# all locked records and their immutable identity fields.
+python workflow1_daily.py runs/buyer-sprint/reviewed.json --date 2026-09-23 \
+  --mode buyer-intent --sample-lock runs/buyer-sprint/sampled-lock.json \
+  --output-dir outputs/buyer-intent --dry-run
+```
+
+Each history flag may be repeated for multiple files. The four counts
+`raw_pool`, `history_excluded`, `eligible_after_history_filter` and `sampled`
+are saved in `sampling-summary.json`. History is checked when a new sample is
+created; rerunning an existing lock preserves that run's original exclusions
+and sample. Start a new run directory to apply newly added history sources.
+
+The buyer-intent runner reads the lock before qualification, audits, funnel
+events or shortlist preparation. `decisions.json` is the full locked cohort in
+sample order; `top20.json` and `top5.json` are P0 views of that cohort. A
+missing row stays in `decisions.json` with `research_failed` and
+`contact_missing` status. Unlocked or spoofed company identities are written
+to `rejected-not-in-sample-lock.json` and fail the run before sales outputs.
+Each enriched/decision record and the summaries include
+`sample_lock_verified`. The generic source-pool builder remains a pre-sampling
+discovery tool, so it does not consume a lock.
+
+Build the company pool before doing any search or AI-visibility work. The native adapters implement
+the useful parts of the evaluated OSM lead-pool and website-contact projects without installing
+overlapping crawler applications as opaque runtime dependencies.
+
+```bash
+# Fetch high-value local categories from a bounded OSM/Overpass geography.
+python build_source_pool.py overpass --bbox 25.70,-80.35,25.90,-80.10 \
+  --sector regulated_retail --sector automotive_high_value \
+  --output runs/miami-raw.json
+# `--place "Miami, Florida"` may replace `--bbox`; place geocoding only resolves
+# the boundary and is not used to discover businesses.
+
+# Or normalize an already downloaded OSM, public GeoJSON or registry CSV snapshot.
+python build_source_pool.py osm-json runs/overpass.json --output runs/osm-raw.json
+python build_source_pool.py geojson runs/licenses.geojson \
+  --dataset-url https://data.example.gov/business-licenses \
+  --source-name city-business-licenses --output runs/licenses-raw.json
+python build_source_pool.py merge runs/osm-raw.json runs/licenses-raw.json \
+  --output runs/combined-raw.json
+
+# Next, sample and lock this RAW pool as shown above before contact enrichment.
+```
+
+Each raw-pool run writes both the JSON records and a `.manifest.json` with source names, input URLs,
+record count and a SHA-256 snapshot hash. OSM records retain the original object URL and all observed
+locations. A missing source `website` tag is recorded as unknown, not as proof that no website
+exists. Contact enrichment respects robots by default, never turns a phone into WhatsApp, and never
+equates a business account with a decision maker.
+
+See [system/source-pool-integrations.md](system/source-pool-integrations.md) for evaluated upstream
+projects, enabled adapters and deliberately disabled integrations.
