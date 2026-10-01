@@ -55,7 +55,7 @@ the default buyer-intent qualification path.
 - Web3 only; handmade and regulated/high-risk categories stay excluded.
 - Owner-operated or independent small businesses only. Chains, franchises, branded branches, unknown ownership, and businesses with 3+ locations are rejected in code.
 - No quota filling. A request for 30 means research up to 30 valid records; invalid or unverified records are not replaced with fillers.
-- WhatsApp is preferred. Telegram is capped at 3 retained records per run.
+- Legacy Telegram behavior remains capped at 3 retained records per run.
 - P0 requires activity within 3 days, a team upper bound of 40, business quality `strong`, a `strong` or `moderate` distribution gap, observed public reply behavior, and a confirmed decision-maker contact.
 - Ranking priority is reply probability → decision-maker access → real business quality → partnership openness → GEO/search gap.
 - `Not found` Reply Behaviour is capped at 12/30 and `Inaccessible` is inferred only; neither can enter P0.
@@ -109,34 +109,59 @@ The code does not guarantee replies, rankings, traffic, sales, or conversions. H
 ### Contact-first dual pools (default for new runs)
 
 The 1,000+ RAW records are a discovery pool, not the final prospect list. A new
-run excludes history, checks the supplied company websites for explicit contact
-routes (home and up to one contact/about page), then writes four **pre-lock**
-files beside `enriched.json`:
+run excludes history, resolves missing official websites only from explicit
+outbound links on RAW source/profile pages, and checks those sites for explicit
+contact routes. Contact checks inspect the home page and the strongest contact
+page first, stop as soon as a valid direct chat link appears, and otherwise
+continue up to five same-domain pages (including Portuguese `/contato`,
+`/contacto`, `/fale-conosco`, `/atendimento`, `/loja` and `/whatsapp`). Robots
+rules and same-domain limits remain in force. Search engines are never used to
+discover companies or resolve their websites. The run writes pre-lock files
+beside `enriched.json`:
 
-- `prelock-chat.json`: official website links to WhatsApp or Telegram. WhatsApp
-  is preferred; Telegram is capped at six among a 30-company sample. A company
-  chat link does not establish decision-maker ownership.
+- `prelock-chat.json`: official website links to WhatsApp or Telegram. A formal
+  30-company sample requires exactly 24 verified WhatsApp and 6 verified direct
+  Telegram routes. A company chat link does not establish decision-maker ownership.
 - `prelock-email.json`: email-only candidates **with an explicit human quality
   review**. This pool never fills chat quotas and is not sent automatically.
 - `prelock-email_review.json`: email-only candidates awaiting the quality review.
 - `prelock-review.json`: no verified chat/email route, unavailable website,
   secondary vertical or another preliminary exclusion.
+- `prelock-icp-pass.json`, `prelock-icp-review.json` and
+  `prelock-icp-reject.json`:
+  cheap ICP and buyer-intent outcomes for chat candidates. Only `PRELOCK_PASS`
+  rows can enter the stratified sampler. Supply evidence in `prelock_assessment`
+  (including 1–2 actually tested buyer queries, a purchase scenario, a named
+  competitor/substitute and evidence URLs); missing evidence stays in review.
+- `source-yield.json`: counts and WhatsApp/chat yield rates grouped by source,
+  dataset/domain, country and sampling vertical. This helps prioritize source
+  collection only; it never changes ICP qualification.
+- `prelock-rating-summary.json`: PRELOCK status and buyer-grade totals, exact
+  WhatsApp/Telegram shortfalls, and quota-aware `required_slots` by vertical.
+  Buyer priority scores use the centralized `prospect_os/buyer_rating.py`
+  `RATING_CONFIG` (`buyer-rating-v1`, 0–100). Each positive category score needs
+  a scored assessment and traceable source URL, timestamp, evidence label and
+  claim; missing rating inputs earn no points. PRELOCK hard gates are evaluated
+  first and are never overridden by grade.
 
 For an email-only record to enter the quality-reviewed email pool, supply
 `prelock_quality_review: {"reviewed": true, "rating": "high", "claim": "...",
 "source_url": "https://..."}` in its RAW record. A title or score alone is not
-proof. The pre-lock website checks resume from `prelock-screen.jsonl`; use
+proof. The pre-lock website checks start with Web3, AI/B2B and vape/tobacco,
+then alcohol/adult retail, and resume from `prelock-screen.jsonl`; use
 `--refresh-prelock` in a **new run directory** to revisit changed websites.
 These are route candidates, not P0 sales qualifications: the existing owner,
 activity, buyer-query, competitor and first-fix gates still apply afterward.
 
-The sampler sees only `prelock-chat.json`. A 30-record sample aims for at least
-24 website-linked WhatsApp routes and at most six Telegram routes while keeping
-the 15/15 Track split and city cap. If fewer qualifying routes exist, the
-shortfall appears in `sampling-summary.json`; email does not silently substitute
-for chat. By default, a shortfall writes the pre-lock files and summary but
-does not freeze a partial sample. Add more eligible RAW records and rerun, or
-use `--allow-shortfall-lock` for an explicitly exploratory partial lock.
+The sampler sees only `PRELOCK_PASS` rows, ranks S → A → B inside each existing
+vertical bucket, and excludes C from a formal 30-company sample. It preserves
+the vertical mix, 15/15 Track split, city cap, source diversity and seed tie-break.
+If a prospect publishes both routes, WhatsApp is the default; Telegram is selected
+only when needed to meet the exact 24/6 quota, and both original routes remain in
+the record. If any vertical or channel quota is short, the run writes the pre-lock
+files and summary but does not freeze a partial formal sample. Email does not
+substitute for chat. `--allow-shortfall-lock` remains diagnostic-only and must not
+be used for the formal run.
 Never call a phone number WhatsApp without an explicit link. No bulk
 email tool or automatic message sending is part of this workflow.
 

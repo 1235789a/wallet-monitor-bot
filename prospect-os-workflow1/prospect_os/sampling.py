@@ -228,6 +228,13 @@ def _pick(
         if not allowed:
             break
         row = min(allowed, key=lambda item: (
+            {"S": 0, "A": 1, "B": 2, "C": 3}.get(item.get("buyer_grade"), 4),
+            -int(item.get("buyer_priority_score") or 0),
+            -int((item.get("rating_breakdown") or {}).get("decision_maker_reachability") or 0),
+            -int((item.get("rating_breakdown") or {}).get("buyer_intent") or 0),
+            0 if (telegram_counts is not None and telegram_cap is not None
+                  and telegram_counts['telegram'] < telegram_cap
+                  and item.get('prelock_channel') == 'telegram') else 1,
             0 if not prefer_whatsapp or item.get('prelock_quality_reviewed') else 1,
             0 if not prefer_whatsapp or item.get('prelock_channel') == 'whatsapp' else 1,
             source_counts[_source_key(item)],

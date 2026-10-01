@@ -6,9 +6,9 @@ The five-month target is RMB 100,000 in cumulative GEO revenue. Contact and scra
 diagnostics. The outcome funnel is Qualified Prospect → Audit Sent/Viewed → Sales Conversation →
 Offer → Paid → Delivered → Case Study → Recurring/Referral.
 
-The formal prospect cohort is exactly 30 companies. A shortfall must be diagnosed at the failed
-funnel stage and then used to direct the next expansion batch; it must not end after one low-yield
-batch or one PRELOCK_REVIEW. Expansion must stay inside the evidence and ICP gates below.
+The formal cohort target is exactly 30 companies. A shortfall must be diagnosed at the failed funnel
+stage, then used to direct the next source-first batch. A low-yield batch or PRELOCK_REVIEW never
+ends the expansion run.
 
 ## Fixed formal 30-company mix
 
@@ -18,10 +18,10 @@ batch or one PRELOCK_REVIEW. Expansion must stay inside the evidence and ICP gat
   one or two locations and an independent site. Count locations across the complete source pool by
   normalized domain/brand and reconcile that count to the official identity; one map point alone is
   not proof. Three or more locations is a hard failure.
-- Vertical targets: Web3 8, AI/software B2B 7, vape 5, alcohol/wine 5, adult retail 5. The
-  official contact mix is exactly 24 verified WhatsApp and 6 verified direct Telegram routes.
-- One track or vertical never fills another's shortfall. Chains, franchises and do-not-contact
-  records are excluded. Never lower evidence requirements to fill a quota.
+- Vertical targets: Web3 8, AI/software B2B 7, vape 5, alcohol/wine 5, adult retail 5.
+- Formal chat mix: exactly 24 verified WhatsApp and 6 verified direct Telegram accounts. One track
+  or vertical never fills another's shortfall. Chains, franchises and do-not-contact records are
+  excluded. Never lower evidence requirements to fill any quota.
 
 Discovery is company-first from structured directories, registries, maps or datasets. Search is
 permitted only after discovery to resolve and verify that named company, its contacts, buyer-query
@@ -36,14 +36,15 @@ Each P0 must have:
 2. Evidence of a real small business/non-chain identity.
 3. Buying-pain evidence such as current service/content investment, public acquisition activity or
    another dated commercial growth signal.
-4. Before Sample Lock, only a light preflight: one or two representative, service-relevant,
-   non-brand buyer queries that establish a plausible purchase scenario and competitor/substitute.
-5. After Sample Lock, complete five to ten manually reviewed queries and at least five tested
-   query result samples with platform/date/scope, returned URLs, prospect presence and named
-   competitors.
+4. Before Sample Lock, a light preflight uses one or two representative buyer queries to establish
+   a plausible purchase scenario and competitor/substitute.
+5. After Sample Lock, complete five to ten manually reviewed queries and at least five tested query
+   samples with platform/date/scope, returned URLs, prospect presence and named competitors.
 6. Three source-backed, page-specific gaps and one bounded first fix.
 7. An official public email, direct WhatsApp/TG business route or verified founder social profile.
-8. A specific, permission-based opener. No outreach is sent automatically.
+8. A specific, permission-based opener. Generate and review it with
+   [outreach-message-policy.md](outreach-message-policy.md) and the
+   [geo-outreach-copy Skill](../.codex/skills/geo-outreach-copy/SKILL.md). No outreach is sent automatically.
 
 Weights: acquisition investment 25, buyer value 15, tested visibility gap 25, decision access 15,
 delivery fit 10, recent activity 8 and USDT 2. USDT is a bonus only. A score is a review priority,
@@ -74,24 +75,22 @@ Persist the required funnel stages and controlled lost reasons. `AUDIT_SENT`, `A
 rates; leave individual reply/audit/purchase probabilities null until enough labelled outcomes
 exist for honest calibration.
 
+
 ## Continuous prelock expansion
 
-- Maintain a persistent reserve target of 42 `PRELOCK_PASS` companies before selecting the formal
-  30. The reserve is not a partial Sample Lock and does not weaken any qualification gate.
-- Process new RAW in batches of 50–100. After each batch, write `required_slots.json`,
-  `source-yield.json` and `expansion-state.json`; target the actual missing Track, vertical and
-  chat channel.
-- A `PRELOCK_REVIEW` enters a prioritized repair queue. Retry only its missing evidence, at most
-  three times. Then mark it `PRELOCK_PARKED` and continue with the next candidate/source. REVIEW,
-  REJECT, a website failure, or one weak batch is never a task-completion condition.
-- Pause an individual source when 30–50 fresh rows produce no valid direct chat route, website
-  resolution remains below 15% after 50 rows, no PRELOCK_PASS appears after 50 rows, or at least
-  half its screened rows are stale, closed, chain or non-ICP. Preserve the stop reason and switch
-  to another legal off-search source.
-- Use `SAMPLE_READY` only when the existing sampler can select exactly 30 PRELOCK_PASS records
-  meeting the 15/15 Track split, all vertical targets, exactly 24 WhatsApp and 6 direct Telegram,
-  history exclusion, city cap and source constraints.
-- Use `SOURCE_EXHAUSTED` only after at least 1,000 fresh RAW rows across at least eight sources
-  and three consecutive batches of at least 100 rows each yield at most one new PRELOCK_PASS.
-  Otherwise retain a resumable `PROGRESS` checkpoint. `EXECUTION_BLOCKED` is reserved for a
-  genuine technical or permission failure.
+- Build a 42-company `PRELOCK_PASS` reserve pool before formal selection. It is only a reserve;
+  it does not alter the final 30 or weaken an ICP gate.
+- Process batches of 50–100 RAW, recompute required Track/vertical/channel slots each time, and
+  prefer sources with higher recent `PRELOCK_PASS` and direct-chat yield. Reuse website/contact
+  caches; never re-fetch completed records without an explicit refresh reason.
+- Route every `PRELOCK_REVIEW` into a priority queue. Repair only missing evidence, at most three
+  attempts. Park unresolved records and continue the next candidate/source.
+- Stop a single source after 30–50 fresh records with no valid direct chat, website resolution below
+  15% after 50, zero `PRELOCK_PASS` after 50, or a majority of stale/closed/chain/non-ICP records.
+  Record the reason and switch to another permitted off-search source.
+- `SAMPLE_READY` requires a feasible exact 30-company selection from `PRELOCK_PASS` only, with
+  Track A/B 15/15, all vertical quotas, exactly 24 WhatsApp and 6 direct Telegram, and existing
+  history/city/source constraints. Only then may the existing Sample Lock be created.
+- `SOURCE_EXHAUSTED` requires at least 1,000 fresh RAW across eight sources and three consecutive
+  batches of at least 100 with at most one new `PRELOCK_PASS` each. Otherwise save `PROGRESS`
+  and resume. `EXECUTION_BLOCKED` is reserved for an actual technical or permission failure.

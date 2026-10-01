@@ -12,6 +12,7 @@ import re
 import ssl
 import time
 from datetime import UTC, datetime
+from functools import lru_cache
 from html.parser import HTMLParser
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -29,6 +30,34 @@ GENERIC_EMAIL_LOCALS = {
 }
 PRIORITY_PATH_TERMS = (
     "contact", "about", "team", "founder", "owner", "leadership", "management",
+    "customer", "support", "booking", "reservation", "store", "shop", "location",
+    "sales", "contact-us", "contactus", "contactos", "contactanos", "contáctanos",
+    "contato", "contacto", "fale-conosco", "faleconosco", "atendimento", "pedidos",
+    "encomendas", "loja", "lojas", "suporte", "orcamento", "orçamento", "whatsapp",
+    "quem-somos", "sobre", "nosotros", "quienes-somos", "tienda",
+)
+CONTACT_PATH_TERMS = (
+    "contact", "contact-us", "contactus", "contacto", "contactos", "contactanos",
+    "contáctanos", "contato", "fale-conosco", "faleconosco", "atendimento",
+    "support", "sales", "suporte", "pedidos", "encomendas", "orçamento",
+    "orcamento", "whatsapp",
+)
+CONTACT_ANCHOR_TERMS = (
+    "contact", "contact-us", "contacto", "contactos", "contactanos", "contáctanos",
+    "contato", "fale conosco", "fale-conosco", "faleconosco", "atendimento",
+    "support", "sales", "suporte", "pedidos", "encomendas", "orçamento",
+    "orcamento", "whatsapp", "about", "team", "founder", "owner", "store", "shop",
+    "quem somos", "quem-somos", "sobre", "nosotros", "quienes somos",
+    "quienes-somos", "tienda",
+)
+DIRECT_TG_ANCHOR = re.compile(
+    r"\b(chat|message|contact|direct|dm|fale|contato|atendimento|parcerias?|commercial|sales)\b",
+    re.I,
+)
+TG_GROUP_ANCHOR = re.compile(r"\b(news|channel|community|group|join|feed|updates|canal|grupo)\b", re.I)
+EXPLICIT_CHAT_URL = re.compile(
+    r"https?://(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com|whatsapp\.com|t\.me|telegram\.me)/[^\s\"'<>\\]+",
+    re.I,
 )
 SOCIAL_HOSTS = {
     "linkedin.com": "linkedin", "facebook.com": "facebook",
@@ -133,11 +162,19 @@ def _route_contact(channel: str, url: str, source_url: str, anchor_text: str) ->
     value = _clean_url(url)
     route_type = "business_chat" if channel == "whatsapp" else "unknown"
     if channel == "telegram":
-        path = urlsplit(url).path.strip("/")
-        if path.startswith(("joinchat/", "+", "s/")):
+        path = urlsplit(url).path.strip("/").casefold()
+        if (path.startswith(("joinchat/", "+", "s/", "c/", "share/", "addlist/"))
+                or path.casefold() == "share" or TG_GROUP_ANCHOR.search(anchor_text or "")):
             route_type = "group_or_channel"
         elif path.casefold().endswith("bot"):
             route_type = "bot"
+        elif DIRECT_TG_ANCHOR.search(anchor_text or ""):
+            route_type = "direct_chat"
+        else:
+            # A bare t.me username can identify a group/channel or user.
+            # Keep it out of the direct-chat pool until the official site's
+            # surrounding label makes the intended route clear.
+            route_type = "unverified_telegram_route"
     return {
         "channel": channel,
         "value": value,
@@ -159,6 +196,7 @@ def extract_contacts(page_url: str, page_html: str) -> dict[str, Any]:
     page_text = " ".join(parser.text_parts)
     contacts: list[dict[str, Any]] = []
     internal_links: list[str] = []
+    internal_link_anchors: list[dict[str, str]] = []
     origin = _host(page_url)
 
     for address in EMAIL_PATTERN.findall(page_text):
@@ -203,7 +241,21 @@ def extract_contacts(page_url: str, page_html: str) -> dict[str, Any]:
                 "evidence": _evidence("Social profile is linked from the supplied company website.", page_url),
             })
         elif host == origin and public_http_url(absolute):
-            internal_links.append(_clean_url(absolute))
+            clean = _clean_url(absolute)
+            internal_links.append(clean)
+            internal_link_anchors.append({"url": clean, "text": link["text"]})
+
+    # Some official sites keep click-to-chat URLs in inline widgets rather than
+    # ordinary anchors. Record only explicit WhatsApp/Telegram URLs present in
+    # the supplied page; never infer a route from a phone number.
+    for match in EXPLICIT_CHAT_URL.findall(html.unescape(page_html)):
+        absolute = match.rstrip(".,;:!?)]}")
+        host = _host(absolute)
+        channel = "whatsapp" if host in {"wa.me", "api.whatsapp.com", "web.whatsapp.com", "whatsapp.com"} else "telegram"
+        item = _route_contact(channel, absolute, page_url, "embedded official-site link")
+        if channel == "whatsapp":
+            item["phone_hint"] = _whatsapp_value(absolute)
+        contacts.append(item)
 
     unique: dict[tuple[str, str], dict[str, Any]] = {}
     for contact in contacts:
@@ -212,6 +264,7 @@ def extract_contacts(page_url: str, page_html: str) -> dict[str, Any]:
     return {
         "contacts": list(unique.values()),
         "internal_links": list(dict.fromkeys(internal_links)),
+        "internal_link_anchors": internal_link_anchors,
         "decision_role_terms_observed": sorted({match.group(1).casefold() for match in ROLE_PATTERN.finditer(page_text)}),
     }
 
@@ -233,19 +286,45 @@ def fetch_html(url: str, timeout: int = 15, max_bytes: int = 1_500_000) -> tuple
         return body.decode(charset or "utf-8", errors="replace"), response.geturl()
 
 
-def robots_allows(url: str, timeout: int = 10) -> bool:
-    parsed = urlsplit(url)
-    robots_url = urlunsplit((parsed.scheme, parsed.netloc, "/robots.txt", "", ""))
+@lru_cache(maxsize=2048)
+def _robots_parser(scheme: str, netloc: str, timeout: int) -> RobotFileParser | None:
+    robots_url = urlunsplit((scheme, netloc, "/robots.txt", "", ""))
     parser = RobotFileParser()
     parser.set_url(robots_url)
     try:
         request = Request(robots_url, headers={"User-Agent": USER_AGENT})
         with urlopen(request, timeout=timeout) as response:
             parser.parse(response.read().decode("utf-8", errors="replace").splitlines())
-        return parser.can_fetch(USER_AGENT, url)
+        return parser
     except (HTTPError, URLError, TimeoutError, OSError, ValueError):
         # A missing/unreachable robots file is not interpreted as a prohibition.
-        return True
+        return None
+
+
+def robots_allows(url: str, timeout: int = 10) -> bool:
+    parsed = urlsplit(url)
+    parser = _robots_parser(parsed.scheme, parsed.netloc, timeout)
+    return True if parser is None else parser.can_fetch(USER_AGENT, url)
+
+
+def _is_explicit_direct_chat(contact: dict[str, Any]) -> bool:
+    """Cheap early-stop check; never upgrades a phone or ambiguous TG URL."""
+    channel = contact.get("channel")
+    url = str(contact.get("value") or "")
+    host = _host(url)
+    path = urlsplit(url).path.strip("/").casefold()
+    if channel == "whatsapp" and host in {
+        "wa.me", "api.whatsapp.com", "web.whatsapp.com", "whatsapp.com",
+    }:
+        digits = _whatsapp_value(url)
+        if host == "wa.me" and path.casefold().startswith("message/"):
+            return len(path.split("/", 1)[1]) >= 6
+        return 7 <= len(digits) <= 15
+    if channel == "telegram" and host in {"t.me", "telegram.me"}:
+        return (contact.get("route_type") == "direct_chat" and bool(path)
+                and not path.startswith(("joinchat/", "+", "s/", "c/", "share/", "addlist/"))
+                and not path.casefold().endswith("bot"))
+    return False
 
 
 def enrich_record(
@@ -254,6 +333,7 @@ def enrich_record(
     max_pages: int = 5,
     delay_seconds: float = 0.5,
     respect_robots: bool = True,
+    robots_timeout: int = 10,
     fetcher: Callable[[str], tuple[str, str]] = fetch_html,
 ) -> dict[str, Any]:
     result = dict(record)
@@ -268,10 +348,6 @@ def enrich_record(
     if not public_http_url(website):
         result["contact_enrichment_status"] = "no_public_website_hint"
         return result
-    if respect_robots and not robots_allows(website):
-        result["contact_enrichment_status"] = "robots_disallowed"
-        return result
-
     queue = [website]
     seen: set[str] = set()
     contacts: dict[tuple[str, str], dict[str, Any]] = {}
@@ -280,9 +356,17 @@ def enrich_record(
         url = queue.pop(0)
         if url in seen or _host(url) != _host(website):
             continue
+        if respect_robots and not robots_allows(url, timeout=robots_timeout):
+            result["contact_enrichment_errors"].append({"url": url, "error": "robots_disallowed"})
+            continue
         seen.add(url)
         try:
             body, final_url = fetcher(url)
+            if _host(final_url) != _host(website):
+                result["contact_enrichment_errors"].append({
+                    "url": url, "error": "redirected_outside_company_domain",
+                })
+                continue
             parsed = extract_contacts(final_url, body)
             result["pages_checked"].append(final_url)
             for contact in parsed["contacts"]:
@@ -294,15 +378,43 @@ def enrich_record(
                     "source_url": final_url,
                     "status": "role_terms_only_name_and_route_unresolved",
                 })
+            anchor_by_link: dict[str, str] = {}
+            for item in parsed.get("internal_link_anchors", []):
+                anchor_by_link.setdefault(item["url"], item.get("text", ""))
+
+            def page_priority(link: str) -> tuple[int, int, int]:
+                path = unquote(urlsplit(link).path).casefold()
+                anchor = anchor_by_link.get(link, "").casefold()
+                contact_path = any(term in path for term in CONTACT_PATH_TERMS)
+                contact_anchor = any(term in anchor for term in CONTACT_ANCHOR_TERMS)
+                useful_path = any(term in path for term in PRIORITY_PATH_TERMS)
+                useful_anchor = any(term in anchor for term in CONTACT_ANCHOR_TERMS)
+                return (0 if contact_path or contact_anchor else 1,
+                        0 if useful_path or useful_anchor else 1, len(link))
+
             candidates = sorted(
-                (link for link in parsed["internal_links"] if any(term in urlsplit(link).path.casefold() for term in PRIORITY_PATH_TERMS)),
-                key=lambda link: (0 if "contact" in link.casefold() else 1, len(link)),
+                (link for link in parsed["internal_links"]
+                 if any(term in unquote(urlsplit(link).path).casefold() for term in PRIORITY_PATH_TERMS)
+                 or any(term in anchor_by_link.get(link, "").casefold() for term in CONTACT_ANCHOR_TERMS)),
+                key=page_priority,
             )
             for link in candidates:
                 if link not in seen and link not in queue:
                     queue.append(link)
+            # Some small business sites omit their contact page from the home
+            # navigation. Try common local slugs only after discovered links.
+            for slug in ("contact", "contato", "contacto", "fale-conosco",
+                         "faleconosco", "atendimento", "support", "sales", "whatsapp"):
+                guessed = _clean_url(urljoin(website.rstrip("/") + "/", slug))
+                if guessed not in seen and guessed not in queue:
+                    queue.append(guessed)
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, ssl.SSLError) as exc:
             result["contact_enrichment_errors"].append({"url": url, "error": str(exc)})
+        # Inspect the homepage and the best contact page first. Once any page
+        # proves a direct WhatsApp or Telegram chat route, stop immediately;
+        # otherwise continue, bounded by max_pages.
+        if any(_is_explicit_direct_chat(contact) for contact in contacts.values()):
+            break
         if queue and delay_seconds:
             time.sleep(delay_seconds)
 

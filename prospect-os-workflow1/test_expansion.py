@@ -7,6 +7,7 @@ from prospect_os.expansion import (
     compute_required_slots, make_review_item, record_review_attempt,
     rank_sources, run_expansion_loop, source_exhausted_criteria, source_stop_reason,
 )
+from expand_buyer_sprint import _historical_source_key, _identity_aliases
 from prospect_os.sampling import (
     WEB3, AI_B2B, VAPE_TOBACCO, ALCOHOL_BAR, ADULT_RETAIL,
 )
@@ -121,6 +122,32 @@ class ExpansionTests(unittest.TestCase):
         self.assertFalse(source_exhausted_criteria(state))
         state["fresh_raw_scanned"] = 1000
         self.assertTrue(source_exhausted_criteria(state))
+
+    def test_source_yield_names_map_to_raw_source_ids(self):
+        self.assertEqual(_historical_source_key("Himerus public adult-retailer directory"),
+                         "himerus_retailer_directory")
+        self.assertEqual(_historical_source_key("StartupBase/ABStartups selectively assessed slice"),
+                         "startupbase_abstartups")
+
+    def test_cross_source_ids_dedupe_by_official_domain(self):
+        directory = {"directory_id": "d-1", "company_name": "Example", "website_url": "https://www.example.com/"}
+        source = {"source_id": "s-2", "company_name": "Example LLC", "website_url": "https://example.com"}
+        self.assertTrue(_identity_aliases(directory) & _identity_aliases(source))
+
+    def test_empty_sources_below_exhaustion_threshold_remain_nonterminal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = run_expansion_loop(
+                state_path=root / "state.json", required_slots_path=root / "slots.json",
+                source_yield_path=root / "yield.json",
+                discover_batch=lambda **kwargs: {"source_name": "inputs_empty", "records": [],
+                                                 "all_sources_exhausted": True},
+                screen_and_preflight=lambda rows, slots: [],
+                repair_review=lambda row, action: row,
+                sample_ready=lambda rows: False, reserve_pool_target=42,
+            )
+            self.assertEqual(result["status"], "PROGRESS")
+            self.assertIsNone(result["terminal_status"])
 
 
 if __name__ == "__main__":

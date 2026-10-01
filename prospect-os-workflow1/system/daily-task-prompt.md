@@ -103,9 +103,9 @@
 
 禁止虚构客户数、员工数、回复习惯、合作历史、GEO能力、USDT接受情况、Telegram或WhatsApp。优先第一方来源，第三方目录只作佐证。
 
-## 推荐首条消息
+## 首轮外联话术
 
-每家只生成一条10–45词英文开场：一个真实业务观察＋一个容易回答的问题，只含一个问号。禁止推销、发网址、谈价格、约电话、立即说partnership opportunity、提前问USDT或一次问多个问题。所有消息仅生成草稿，必须由用户人工发送。
+WhatsApp/Telegram 首条消息生成与审查统一遵循 [outreach-message-policy.md](outreach-message-policy.md) 和仓库 Skill `.codex/skills/geo-outreach-copy/SKILL.md`。不得在本提示词中另设话术模板或覆盖 PRELOCK_REVIEW / EVIDENCE_PASS 规则。只准备草稿，交由用户人工审核，不自动发送。
 
 ## 当前聊天与文件输出
 
@@ -119,7 +119,7 @@
 - 可点击WhatsApp / Telegram / Facebook；
 - Why this tier、Recommended first message。
 
-首条消息必须先做简短、自然的自我介绍，再写客户专属事实并提出一个容易回答的问题。推荐结构：`Hi {name}, I’m [Your Name]. I help Web3 and payment companies explain their services clearly in AI search. {specific fact}. {one natural question}`。不得一上来盘问，不得省略身份，也不得虚构姓名；`[Your Name]`由用户发送前人工替换。消息保持简短，不硬推销、不报价。
+首条消息只显示 `recommended_first_message` 和 `message_quality`；生成两条候选并由 reviewer 选一条的流程见上述政策与 Skill。发送者姓名保持 `[Your Name]` 占位符，待用户发送前自行替换。
 
 正式运行后写入SQLite，生成带运行编号的P0日报和CSV，并生成/更新Obsidian商家卡片。不得自动联系商家。
 

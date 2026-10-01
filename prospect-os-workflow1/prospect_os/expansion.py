@@ -189,6 +189,7 @@ def load_expansion_state(path: Path, *, reserve_pool_target: int = RESERVE_POOL_
         state.setdefault("pass_records", [])
         state.setdefault("review_queue", [])
         state.setdefault("parked_records", [])
+        state.setdefault("rejected_records", [])
         state.setdefault("rejected_count", 0)
         state.setdefault("fresh_raw_scanned", 0)
         state.setdefault("consecutive_low_yield_batches", 0)
@@ -198,7 +199,8 @@ def load_expansion_state(path: Path, *, reserve_pool_target: int = RESERVE_POOL_
             "fresh_raw_scanned": 0, "sources_attempted": [], "source_yield": {},
             "reserve_pool_target": reserve_pool_target, "reserve_pool_pass": 0,
             "review_queue": [], "parked_records": [], "pass_records": [],
-            "rejected_count": 0, "consecutive_low_yield_batches": 0, "batch_history": [],
+            "rejected_records": [], "rejected_count": 0,
+            "consecutive_low_yield_batches": 0, "batch_history": [],
         }
     state["reserve_pool_target"] = reserve_pool_target
     state["required_slots"] = compute_required_slots(
@@ -275,6 +277,7 @@ def run_expansion_loop(
                 state["parked_records"] = _merge_rows(state["parked_records"], [updated])
             else:
                 state["rejected_count"] += 1
+                state["rejected_records"] = _merge_rows(state.get("rejected_records", []), [updated])
         passes = state["pass_records"]
         state["required_slots"] = compute_required_slots(passes, reserve_pool_target=reserve_pool_target)
         if len(passes) >= reserve_pool_target and sample_ready(passes):
@@ -314,9 +317,10 @@ def run_expansion_loop(
             write_json_atomic(state_path, state)
             continue
 
-        fresh_rows = [r for r in rows if sampling_record_key(r) not in {
-            sampling_record_key(x) for x in state["pass_records"] + state["review_queue"]
-            + state["parked_records"]}]
+        processed_ids = {sampling_record_key(x) for x in state["pass_records"]
+                         + state["review_queue"] + state["parked_records"]
+                         + state.get("rejected_records", [])}
+        fresh_rows = [r for r in rows if sampling_record_key(r) not in processed_ids]
         if not fresh_rows:
             state["last_batch_result"] = {"source_name": source, "fresh_raw": 0,
                                           "note": "batch contained only already processed identities"}
@@ -381,6 +385,7 @@ def run_expansion_loop(
                 metrics["prelock_reject"] += 1; batch_counts["prelock_reject"] += 1
                 country_stats["prelock_reject"] += 1; vertical_stats["prelock_reject"] += 1
                 state["rejected_count"] += 1
+                state["rejected_records"] = _merge_rows(state.get("rejected_records", []), [row])
             else:
                 item = make_review_item(row, str(row.get("review_reason") or "other_evidence_missing"),
                                         attempts=int(row.get("review_attempts", 0)))
