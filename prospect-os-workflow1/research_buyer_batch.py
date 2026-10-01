@@ -14,8 +14,20 @@ from prospect_os.sampling import DEFAULT_SEED, sampling_record_key, stratified_s
 from prospect_os.sample_lock import DEFAULT_LOCK, align_to_lock, freeze_sample, load_lock, verify_final_ids
 from prospect_os.history_exclusion import exclude_history
 from prospect_os.contact_pools import screen_raw_pool
+from prospect_os.expansion import run_expansion_loop
 
 CACHE = Path('runs/buyer-sprint/pages')
+
+
+def run_expansion_until_terminal(**pipeline_callbacks):
+    """Run the resumable prelock expansion coordinator through callbacks.
+
+    The callbacks reuse the configured source discovery, history exclusion,
+    website/contact screening, ICP and buyer-intent preflight implementations.
+    This intentionally does not alter `run_batch`, the stratified sampler, or
+    Sample Lock; formal locking remains a separate post-readiness action.
+    """
+    return run_expansion_loop(**pipeline_callbacks)
 
 
 def page(url):
