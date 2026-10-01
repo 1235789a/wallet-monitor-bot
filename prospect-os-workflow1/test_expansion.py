@@ -7,7 +7,7 @@ from prospect_os.expansion import (
     compute_required_slots, make_review_item, record_review_attempt,
     rank_sources, run_expansion_loop, source_exhausted_criteria, source_stop_reason,
 )
-from expand_buyer_sprint import _historical_source_key, _identity_aliases
+from expand_buyer_sprint import _historical_source_key, _identity_aliases, _merge_cache_files
 from prospect_os.sampling import (
     WEB3, AI_B2B, VAPE_TOBACCO, ALCOHOL_BAR, ADULT_RETAIL,
 )
@@ -148,6 +148,54 @@ class ExpansionTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "PROGRESS")
             self.assertIsNone(result["terminal_status"])
+
+    def test_processed_reject_is_not_counted_again_after_resume(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            row = {"company_name": "rejected", "identity_key": "same-1", "vertical": WEB3}
+            state = {
+                "status": "RUNNING", "sources_attempted": [], "source_yield": {},
+                "batch_history": [], "fresh_raw_scanned": 0, "pass_records": [],
+                "review_queue": [], "parked_records": [], "rejected_records": [],
+                "processed_record_keys": [], "rejected_count": 0,
+                "consecutive_low_yield_batches": 0, "reserve_pool_target": 42,
+            }
+            path = root / "state.json"
+            path.write_text(json.dumps(state))
+            screen_calls = []
+            discovered = 0
+
+            def discover(**kwargs):
+                nonlocal discovered
+                discovered += 1
+                if discovered <= 2:
+                    return {"source_name": f"source-{discovered}", "records": [dict(row)]}
+                return {"source_name": "empty", "records": [], "all_sources_exhausted": True}
+
+            result = run_expansion_loop(
+                state_path=path, required_slots_path=root / "slots.json",
+                source_yield_path=root / "yield.json",
+                discover_batch=discover,
+                screen_and_preflight=lambda rows, slots: (screen_calls.append(rows[0]["identity_key"])
+                    or [{**rows[0], "prelock_status": "PRELOCK_REJECT"}]),
+                repair_review=lambda row, action: row,
+                sample_ready=lambda rows: False, reserve_pool_target=42, batch_size=1, max_cycles=4,
+            )
+            self.assertEqual(screen_calls, ["same-1"])
+            self.assertEqual(result["fresh_raw_scanned"], 1)
+            self.assertEqual(result["rejected_count"], 1)
+            self.assertIn("identity_key:same-1", result["processed_record_keys"])
+
+    def test_cache_merge_keeps_current_run_entries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source, current, merged = root / "source.jsonl", root / "current.jsonl", root / "merged.jsonl"
+            source.write_text(json.dumps({"key": "old", "row": {"company_name": "old"}}) + "\n")
+            current.write_text(json.dumps({"key": "current", "row": {"company_name": "current"}}) + "\n")
+            count = _merge_cache_files([source, current], merged)
+            self.assertEqual(count, 2)
+            values = {json.loads(line)["key"] for line in merged.read_text().splitlines()}
+            self.assertEqual(values, {"old", "current"})
 
 
 if __name__ == "__main__":

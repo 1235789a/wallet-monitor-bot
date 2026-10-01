@@ -91,7 +91,7 @@ def _merge_cache_files(paths, target):
     target.parent.mkdir(parents=True, exist_ok=True)
     rows = {}
     for path in sorted(set(map(Path, paths))):
-        if not path.exists() or path == target:
+        if not path.exists():
             continue
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
@@ -237,6 +237,11 @@ def run_expansion(
         priority_names = [n for n in preferred_sources if n in available]
         priority_names += sorted(n for n in available if n not in priority_names)
         needed = {vertical for vertical, count in short.items() if count > 0}
+        # If a channel is still short, keep testing all formal verticals for
+        # route opportunities; the RAW source usually cannot disclose channel
+        # type until its official site is screened.
+        if any(int(value) > 0 for value in required_slots.get("channel_shortfall", {}).values()):
+            needed.update(FORMAL_30_QUOTAS)
         for name in priority_names:
             rows = available[name]
             relevant = [r for r in rows[cursors[name]:]

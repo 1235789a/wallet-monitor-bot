@@ -186,6 +186,7 @@ def load_expansion_state(path: Path, *, reserve_pool_target: int = RESERVE_POOL_
         state.setdefault("sources_attempted", [])
         state.setdefault("source_yield", {})
         state.setdefault("batch_history", [])
+        state.setdefault("processed_record_keys", [])
         state.setdefault("pass_records", [])
         state.setdefault("review_queue", [])
         state.setdefault("parked_records", [])
@@ -200,6 +201,7 @@ def load_expansion_state(path: Path, *, reserve_pool_target: int = RESERVE_POOL_
             "reserve_pool_target": reserve_pool_target, "reserve_pool_pass": 0,
             "review_queue": [], "parked_records": [], "pass_records": [],
             "rejected_records": [], "rejected_count": 0,
+            "processed_record_keys": [],
             "consecutive_low_yield_batches": 0, "batch_history": [],
         }
     state["reserve_pool_target"] = reserve_pool_target
@@ -317,7 +319,8 @@ def run_expansion_loop(
             write_json_atomic(state_path, state)
             continue
 
-        processed_ids = {sampling_record_key(x) for x in state["pass_records"]
+        processed_ids = set(state.get("processed_record_keys", [])) | {
+            sampling_record_key(x) for x in state["pass_records"]
                          + state["review_queue"] + state["parked_records"]
                          + state.get("rejected_records", [])}
         fresh_rows = [r for r in rows if sampling_record_key(r) not in processed_ids]
@@ -338,6 +341,13 @@ def run_expansion_loop(
             break
         if {sampling_record_key(r) for r in screened} - {sampling_record_key(r) for r in fresh_rows}:
             raise ValueError("screen/preflight introduced a company outside the RAW batch")
+        # Persist all completed outcomes, including REJECT. This prevents a
+        # resume from re-counting or re-fetching rows merely because they were
+        # not retained in the review/pass queues.
+        state["processed_record_keys"] = sorted(
+            set(state.get("processed_record_keys", []))
+            | {sampling_record_key(row) for row in fresh_rows}
+        )
 
         metrics = state["source_yield"].setdefault(source, {
             "source_name": source, "fresh_raw": 0, "website_resolved": 0,
