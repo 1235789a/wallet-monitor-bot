@@ -150,11 +150,13 @@ def screen_raw_pool(rows, *, cache_path: Path, screen_fn=None, workers=32, refre
             # normalized from the current RAW source record.
             merged = dict(previous)
             merged.update(row)
-            for field in ('contacts', 'pages_checked', 'contact_enrichment_status',
+            for field in ('contacts', 'pages_checked', 'page_evidence', 'contact_enrichment_status',
                           'contact_enrichment_error', 'prelock_error',
                           'prelock_quality_review', 'prelock_quality_reviewed_at'):
                 if field in previous:
                     merged[field] = previous[field]
+            merged['contact_cache_hit'] = True
+            merged['contact_page_attempts'] = 0
             cached[key] = merged
         elif previous is not None and retry_failed:
             pending.setdefault(key, row)

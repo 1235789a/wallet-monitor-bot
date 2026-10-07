@@ -62,6 +62,14 @@ def rate_candidate(row: dict[str, Any]) -> dict[str, Any]:
             requested = 0
         # A positive score without traceable evidence is discarded.
         score = requested if valid else 0
+        if dimension == "decision_maker_reachability" and "contacts" in row:
+            from .contact_pools import _usable_contact
+            from .contact_reachability import route_summary
+            summary = route_summary(row, _usable_contact)
+            if not summary["reachable_contact_channels"]:
+                score = 0
+            elif not summary["decision_maker_reachability_confirmed"]:
+                score = min(score, 10)  # Human support access is weaker than verified owner access.
         breakdown[dimension] = score
         evidence[dimension] = valid
         if score:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime
 
 from .contact_pools import _usable_contact
+from .contact_reachability import BOT_ONLY, route_summary
 from .sampling import classify_vertical, track_for_vertical
 from .source_pool import public_http_url
 
@@ -41,6 +43,8 @@ def preflight_record(row: dict[str, Any]) -> dict[str, Any]:
     track = assessed_track if assessed_track in {"track_a", "track_b"} else inferred_track
     missing: list[str] = []
     rejects: list[str] = []
+    if row.get("do_not_contact") is True or row.get("chain") is True:
+        rejects.append("chain_or_do_not_contact")
     icp_reasons: list[str] = []
     intent_reasons: list[str] = []
     evidence_urls = list(ev.get("evidence_urls") or [])
@@ -63,6 +67,19 @@ def preflight_record(row: dict[str, Any]) -> dict[str, Any]:
             rejects.append("no_valid_direct_chat_route")
         else:
             missing.append("direct_chat_route_not_yet_verified")
+    reach = route_summary(row, _usable_contact)
+    result.update(reach)
+    if has_chat and not reach["reachable_contact_channels"]:
+        usable_states = [reach["contact_reachability"][channel]
+                         for channel in ("whatsapp", "telegram")
+                         if any(_usable_contact(c, channel, row.get("website_url")) for c in contacts)]
+        if usable_states and all(state == BOT_ONLY for state in usable_states):
+            rejects.append("bot_only_contact_routes")
+        else:
+            missing.append("human_contact_reachability_evidence")
+    # Formal sampling counts only evidence-backed human routes. The original
+    # link inventory remains in contacts and contact-route screening outputs.
+    result["available_contact_channels"] = reach["reachable_contact_channels"]
 
     if ev.get("business_real") is False:
         rejects.append("business_not_real_or_inactive")
@@ -135,6 +152,14 @@ def preflight_record(row: dict[str, Any]) -> dict[str, Any]:
             intent_reasons.append("Tested high-intent queries did not show a purchase scenario")
         else:
             positive = [q for q in valid_queries if q.get("buyer_intent") is True]
+            for query in valid_queries:
+                try:
+                    datetime.fromisoformat(str(query.get("tested_at") or "").replace("Z", "+00:00"))
+                    dated = True
+                except ValueError:
+                    dated = False
+                if not (dated and query.get("platform") and query.get("scope")):
+                    missing.append("buyer_query_test_metadata")
             if not positive:
                 missing.append("buyer_intent_evidence")
             backed = []
@@ -152,8 +177,12 @@ def preflight_record(row: dict[str, Any]) -> dict[str, Any]:
             if not backed and positive:
                 missing.append("buyer_intent_competitor_evidence")
             intent_reasons.append("At least one tested query must show purchase intent and a named competitor or substitute")
+            if not any(q.get("visibility_gap") is True
+                       and q.get("prospect_presence") == "not_in_returned_results"
+                       and q.get("competitor_evidence") for q in positive):
+                missing.append("visibility_gap_evidence")
 
-    if not ev.get("business_evidence_url") and not any(public_http_url(str(u)) for u in evidence_urls):
+    if not public_http_url(str(ev.get("business_evidence_url") or "")) and not any(public_http_url(str(u)) for u in evidence_urls):
         missing.append("preflight_evidence_urls")
     rejects = list(dict.fromkeys(rejects))
     missing = list(dict.fromkeys(missing))

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -11,14 +12,16 @@ from prospect_os.buyer_rating import RATING_CONFIG, rate_candidate
 from prospect_os.contact_pools import screen_raw_pool
 from prospect_os.expansion import (
     MAX_REVIEW_ATTEMPTS, compute_required_slots, load_expansion_state,
-    make_review_item, record_review_attempt, run_expansion_loop, write_json_atomic,
+    make_review_item, record_review_attempt, review_reason, run_expansion_loop, write_json_atomic,
 )
 from prospect_os.history_exclusion import exclude_history
 from prospect_os.prelock_preflight import preflight_record
-from prospect_os.sample_lock import freeze_sample
+from prospect_os.sample_lock import freeze_sample, load_lock
+from prospect_os.source_scheduler import schedule_raw, source_key, identity_aliases, segment_key
+from prospect_os.review_repair import ReviewRepairer
 from prospect_os.sampling import (
     DEFAULT_SEED, FORMAL_30_QUOTAS, SECONDARY, classify_vertical, sampling_record_key,
-    stratified_sample,
+    stratified_sample, formal_sample,
 )
 from prospect_os.source_yield import build_source_yield
 from prospect_os.website_resolution import resolve_website, resolve_website_pool
@@ -26,12 +29,7 @@ from research_buyer_batch import assign_contact_quota
 
 
 def _source_key(row):
-    for field in ("source_type", "source_dataset_url", "source_name",
-                  "discovery_source_url", "profile_url"):
-        value = str(row.get(field) or "").strip()
-        if value:
-            return (urlsplit(value).hostname or value).casefold().removeprefix("www.") if value.startswith(("http://", "https://")) else value
-    return "unknown_source"
+    return source_key(row)
 
 
 def _historical_source_key(name):
@@ -52,37 +50,11 @@ def _historical_source_key(name):
 
 def _identity_aliases(row):
     """Crosswalk RAW and prelock records with different source IDs."""
-    aliases = {"record:" + sampling_record_key(row)}
-    domain = urlsplit(str(row.get("website_url") or row.get("domain") or "")).hostname or ""
-    domain = domain.casefold().removeprefix("www.").strip(".")
-    if domain:
-        aliases.add("domain:" + domain)
-    else:
-        name = " ".join(str(row.get("company_name") or "").casefold().split())
-        if name:
-            aliases.add("name:" + name)
-    return aliases
+    return identity_aliases(row)
 
 
 def _review_reason(row):
-    missing = " ".join(str(x) for x in row.get("prelock_missing_evidence", []))
-    reason = str(row.get("prelock_icp_reason") or "") + " " + missing
-    folded = reason.casefold()
-    if "location" in folded:
-        return "location_count_missing"
-    if "ownership" in folded or "independent" in folded:
-        return "ownership_missing"
-    if "telegram" in folded:
-        return "telegram_route_uncertain"
-    if "chat" in folded or "route" in folded:
-        return "contact_route_uncertain"
-    if "decision" in folded or "team" in folded:
-        return "decision_maker_missing"
-    if "buyer" in folded or "query" in folded or "competitor" in folded:
-        return "buyer_intent_missing"
-    if "website" in folded or "official_website" in folded:
-        return "website_unresolved" if not row.get("website_url") else "website_fetch_failed"
-    return "other_evidence_missing"
+    return review_reason(row)
 
 
 def _merge_cache_files(paths, target):
@@ -90,7 +62,8 @@ def _merge_cache_files(paths, target):
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     rows = {}
-    for path in sorted(set(map(Path, paths))):
+    prior = sorted(set(map(Path, paths)) - {target})
+    for path in prior + [target]:
         if not path.exists():
             continue
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -123,10 +96,14 @@ def _history_inputs(root, explicit):
 
 def run_expansion(
     raw_rows, initial_rows, *, root, run_dir, history_sources,
-    source_yield_report=None, batch_size=100, workers=24, max_pages=5,
+    source_yield_report=None, batch_size=75, workers=12, max_pages=2,
     reserve_pool_target=42, seed=DEFAULT_SEED,
+    max_records=100, max_reviews=20, max_cycles=3, review_evidence=(),
+    screen_fn=None, resolver_fn=resolve_website, repairer=None,
 ):
     root, run_dir = Path(root), Path(run_dir)
+    if not 1 <= max_pages <= 2:
+        raise ValueError("prelock screening supports one or two pages; deeper research belongs after Sample Lock")
     run_dir.mkdir(parents=True, exist_ok=True)
     state_path = run_dir / "expansion-state.json"
     required_path = run_dir / "required_slots.json"
@@ -171,6 +148,15 @@ def run_expansion(
                     "whatsapp_yield": float(item.get("whatsapp_yield_rate", 0)),
                     "telegram_yield": float(item.get("telegram_yield_rate", 0)),
                 }
+            for item in source_yield_report.get("groups", []):
+                name = _historical_source_key(item.get("source_name") or item.get("source"))
+                metrics = source_yield.setdefault(name, {"source_name": name, "by_segment": {}})
+                metrics.setdefault("by_segment", {})[segment_key(item)] = {
+                    "fresh_raw": int(item.get("screened_count", 0)),
+                    "prelock_pass": int(item.get("prelock_pass_count", 0)),
+                    "human_whatsapp_found": int(item.get("human_whatsapp_found", 0)),
+                    "human_telegram_found": int(item.get("human_telegram_found", 0)),
+                }
         state = {
             "status": "RUNNING", "fresh_raw_scanned": 0, "sources_attempted": [],
             "source_yield": source_yield, "reserve_pool_target": reserve_pool_target,
@@ -181,6 +167,45 @@ def run_expansion(
             "merged_website_cache_entries": website_cache_rows,
         }
         state["required_slots"] = compute_required_slots(pass_rows, reserve_pool_target=reserve_pool_target)
+        write_json_atomic(state_path, state)
+
+    if "historical_source_yield" not in state:
+        state["historical_source_yield"] = state.get("source_yield", {})
+    state["schema_version"] = 2
+    write_json_atomic(state_path, state)
+
+    # Historical locked cohorts remain immutable. A resume may report them,
+    # but never attempts to freeze an empty or newly selected replacement.
+    if state.get("status") == "SAMPLE_READY" and (run_dir / "sampled-lock.json").exists():
+        load_lock(run_dir / "sampled-lock.json")
+        state["this_run"] = {"fresh_raw_processed": 0, "review_attempts": 0}
+        return state
+    if state.get("status") != "SAMPLE_READY":
+        updates = {sampling_record_key(row): row for row in review_evidence}
+        retained = []
+        for row in state.get("parked_records", []):
+            patch = updates.get(sampling_record_key(row))
+            digest = hashlib.sha256(json.dumps(patch, sort_keys=True).encode()).hexdigest() if patch else None
+            if patch and digest != row.get("review_input_sha256"):
+                state["review_queue"].append(make_review_item(row, _review_reason(row), attempts=0))
+            else:
+                retained.append(row)
+        state["parked_records"] = retained
+        initial_excluded = []
+        for key in ("pass_records", "review_queue", "parked_records", "rejected_records"):
+            state[key], historical = exclude_history(state.get(key, []), history_sources)
+            initial_excluded.extend(historical)
+        state["initial_history_excluded"] = len(initial_excluded)
+        previous_passes = state.get("pass_records", [])
+        state["pass_records"] = []
+        for row in previous_passes:
+            checked = rate_candidate(preflight_record(row))
+            if checked["prelock_status"] == "PRELOCK_PASS":
+                state["pass_records"].append(checked)
+            elif checked["prelock_status"] == "PRELOCK_REJECT":
+                state["rejected_records"].append(checked)
+            else:
+                state["review_queue"].append(make_review_item(checked, _review_reason(checked)))
         write_json_atomic(state_path, state)
 
     eligible, excluded = exclude_history(raw_rows, history_sources)
@@ -201,19 +226,16 @@ def run_expansion(
         # consume contact-screening capacity or distort source yield.
         if classify_vertical(row) != SECONDARY:
             grouped[_source_key(row)].append(row)
-    cursors = Counter()
 
     selection = {"rows": [], "summary": {}, "channel_assignment": {}}
 
     def sample_ready(rows):
         qualified = [r for r in rows if r.get("prelock_status") == "PRELOCK_PASS"
                      and r.get("buyer_grade") not in RATING_CONFIG["formal_exclude_grades"]]
-        if len(rows) < reserve_pool_target:
+        if len(qualified) < reserve_pool_target:
             return False
-        chosen, summary = stratified_sample(
-            qualified, limit=30, seed=seed, prefer_whatsapp=True, telegram_cap=6,
-        )
-        if len(chosen) != 30:
+        chosen, summary = formal_sample(qualified, seed=seed)
+        if len(chosen) != 30 or summary["eligible_pool"] < reserve_pool_target:
             return False
         chosen, assignment = assign_contact_quota(
             chosen, seed=seed, required=RATING_CONFIG["formal_channels"])
@@ -227,49 +249,33 @@ def run_expansion(
         selection.update(rows=chosen, summary=summary, channel_assignment=assignment)
         return True
 
+    cached_keys = set()
+    if contact_cache.exists():
+        for line in contact_cache.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                cached_keys.add(sampling_record_key(json.loads(line)["row"]))
+
     def discover_batch(*, required_slots, preferred_sources, stopped_sources, batch_size):
-        stopped = set(stopped_sources)
-        available = {name: rows for name, rows in grouped.items()
-                     if name not in stopped and cursors[name] < len(rows)}
-        if not available:
-            return {"source_name": "all_sources", "records": [], "all_sources_exhausted": True}
-        short = required_slots.get("vertical_shortfall", {})
-        priority_names = [n for n in preferred_sources if n in available]
-        priority_names += sorted(n for n in available if n not in priority_names)
-        needed = {vertical for vertical, count in short.items() if count > 0}
-        # If a channel is still short, keep testing all formal verticals for
-        # route opportunities; the RAW source usually cannot disclose channel
-        # type until its official site is screened.
-        if any(int(value) > 0 for value in required_slots.get("channel_shortfall", {}).values()):
-            needed.update(FORMAL_30_QUOTAS)
-        for name in priority_names:
-            rows = available[name]
-            relevant = [r for r in rows[cursors[name]:]
-                        if classify_vertical(r) in needed] if needed else []
-            if not relevant and not needed:
-                relevant = rows[cursors[name]:]
-            if not relevant:
-                continue
-            selected = relevant[:batch_size]
-            if not selected:
-                continue
-            ids = {sampling_record_key(r) for r in selected}
-            # Preserve source order for deterministic resumption while taking only this batch.
-            remaining = [r for r in rows[cursors[name]:] if sampling_record_key(r) not in ids]
-            rows[cursors[name]:] = remaining
-            return {"source_name": name, "records": selected,
-                    "all_sources_exhausted": not any(
-                        other not in stopped and cursors[other] < len(grouped[other])
-                        for other in grouped)}
-        return {"source_name": "all_sources", "records": [], "all_sources_exhausted": True}
+        current = load_expansion_state(state_path, reserve_pool_target=reserve_pool_target)
+        processed = sum((current.get(key, []) for key in (
+            "pass_records", "review_queue", "parked_records", "rejected_records")), [])
+        candidates = [row for rows in grouped.values() for row in rows]
+        processed_keys = set(current.get("processed_record_keys", []))
+        candidates = [row for row in candidates if sampling_record_key(row) not in processed_keys]
+        yields = {**current.get("historical_source_yield", {}), **current.get("source_yield", {})}
+        planned = schedule_raw(candidates, required_slots, yields,
+                               batch_size=batch_size, seed=seed, processed=processed,
+                               cached_keys=cached_keys, stopped_sources=stopped_sources)
+        return {"source_name": "mixed_raw", "records": planned,
+                "all_sources_exhausted": not planned}
 
     def screen_and_preflight(rows, _slots):
         resolved = resolve_website_pool(
-            rows, cache_path=website_cache, resolver_fn=resolve_website,
+            rows, cache_path=website_cache, resolver_fn=resolver_fn,
             workers=min(workers, 24),
         )
         pools = screen_raw_pool(
-            resolved, cache_path=contact_cache, workers=workers, max_pages=max_pages,
+            resolved, cache_path=contact_cache, workers=workers, max_pages=max_pages, screen_fn=screen_fn,
             retry_failed=False,
         )
         screened = [r for key in ("chat", "review", "email", "email_review")
@@ -289,20 +295,26 @@ def run_expansion(
                                  "review_reason": "other_evidence_missing"})
         return assessed
 
-    def repair_review(row, _action):
-        # Re-evaluate cached/source-backed evidence only. Any new assertion still
-        # needs a public evidence URL before preflight can promote the candidate.
-        return rate_candidate(preflight_record(row))
+    repairer = repairer or ReviewRepairer(run_dir / "review-evidence-cache", raw_rows=raw_rows,
+                                          evidence_rows=review_evidence, max_pages=2, max_queries=2)
+
+    def repair_review(row, action):
+        if _review_reason(row) == "website_unresolved":
+            row = resolver_fn(row)
+        return repairer(row, action)
 
     result = run_expansion_loop(
         state_path=state_path, required_slots_path=required_path, source_yield_path=yield_path,
         discover_batch=discover_batch, screen_and_preflight=screen_and_preflight,
         repair_review=repair_review, sample_ready=sample_ready,
         reserve_pool_target=reserve_pool_target, batch_size=batch_size,
-        max_review_attempts=MAX_REVIEW_ATTEMPTS,
+        max_review_attempts=MAX_REVIEW_ATTEMPTS, max_fresh_raw=max_records,
+        max_review_records=max_reviews, max_cycles=max_cycles,
     )
+    result["review_collection_usage"] = getattr(repairer, "usage", {})
     result["excluded_history"] = len(excluded)
-    result["pending_raw_remaining"] = sum(max(0, len(rows) - cursors[name]) for name, rows in grouped.items())
+    result["pending_raw_remaining"] = sum(sampling_record_key(row) not in set(result.get("processed_record_keys", []))
+        for rows in grouped.values() for row in rows)
     result["merged_contact_cache_entries"] = contact_cache_rows
     result["merged_website_cache_entries"] = website_cache_rows
     if result.get("status") == "SAMPLE_READY":
@@ -319,7 +331,9 @@ def run_expansion(
     write_json_atomic(state_path, result)
     write_json_atomic(run_dir / "expansion-result.json", {
         "terminal_status": result.get("terminal_status"), "status": result.get("status"),
-        "fresh_raw_scanned": result.get("fresh_raw_scanned"),
+        "this_run": result.get("this_run"),
+        "current_totals": result.get("current_totals"),
+        "cumulative_fresh_raw_scanned": result.get("fresh_raw_scanned"),
         "sources_attempted": result.get("sources_attempted"),
         "reserve_pool_target": reserve_pool_target,
         "reserve_pool_pass": len(result.get("pass_records", [])),
@@ -340,9 +354,13 @@ def main():
     parser.add_argument("--source-yield", type=Path, help="Existing source-yield-priority-ranking JSON")
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--history", type=Path, action="append", default=[])
-    parser.add_argument("--batch-size", type=int, default=100)
-    parser.add_argument("--workers", type=int, default=24)
-    parser.add_argument("--pages", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=75)
+    parser.add_argument("--workers", type=int, default=12)
+    parser.add_argument("--pages", type=int, default=2)
+    parser.add_argument("--max-records", type=int, default=100)
+    parser.add_argument("--max-reviews", type=int, default=20)
+    parser.add_argument("--max-cycles", type=int, default=3)
+    parser.add_argument("--review-evidence", type=Path, help="Reviewed evidence updates for existing company IDs")
     parser.add_argument("--reserve-pool-target", type=int, default=42)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     args = parser.parse_args()
@@ -355,11 +373,15 @@ def main():
         raw, initial, root=root, run_dir=args.run_dir, history_sources=history,
         source_yield_report=yield_report, batch_size=args.batch_size, workers=args.workers,
         max_pages=args.pages, reserve_pool_target=args.reserve_pool_target, seed=args.seed,
+        max_records=args.max_records, max_reviews=args.max_reviews, max_cycles=args.max_cycles,
+        review_evidence=json.loads(args.review_evidence.read_text(encoding="utf-8")) if args.review_evidence else (),
     )
     print(json.dumps({
         "terminal_status": result.get("terminal_status"),
         "status": result.get("status"),
-        "fresh_raw_scanned": result.get("fresh_raw_scanned"),
+        "this_run": result.get("this_run"),
+        "current_totals": result.get("current_totals"),
+        "cumulative_fresh_raw_scanned": result.get("fresh_raw_scanned"),
         "sources_attempted": len(result.get("sources_attempted", [])),
         "prelock_pass": len(result.get("pass_records", [])),
         "prelock_review": len(result.get("review_queue", [])),

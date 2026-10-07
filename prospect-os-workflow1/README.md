@@ -5,9 +5,11 @@ the existing company-first discovery, verification and deduplication foundation 
 strict buyer-intent mode. The current operating rules are in
 [system/buyer-intent-sprint.md](system/buyer-intent-sprint.md).
 
-The first production mix is fixed at **10 high-ticket B2B + 10 independent local businesses**.
-Neither side may fill the other side's shortfall. WhatsApp, Telegram, email and verified founder
-social profiles are valid routes; no channel quota is a success metric.
+The formal sample is exactly **30 companies: Track A 15 + Track B 15**, with
+**24 WhatsApp + 6 direct Telegram human-reachable routes**. Vertical targets are
+Web3 8, AI/software B2B 7, vape 5, alcohol/wine 5 and adult retail 5. Build at least
+42 distinct eligible reserve companies first. Email and founder social evidence
+remain useful for research, but do not fill the formal chat quotas.
 
 Buyer-intent mode requires 5–10 human-reviewed non-brand buyer queries and at least five actually
 tested query comparisons before P0. Every comparison records the platform, date, returned URLs,
@@ -106,7 +108,69 @@ The code does not guarantee replies, rankings, traffic, sales, or conversions. H
 
 ## Source-first raw company pools
 
-### Contact-first dual pools (default for new runs)
+### Bounded selection and targeted REVIEW repair (recommended)
+
+Use the existing RAW pool before collecting more companies. `expand_buyer_sprint.py`
+persists outcomes and chooses mixed-source batches using vertical deficits, the
+missing channel's observed human-route yield within each source/vertical/country
+segment, country/source diversity and cached evidence. Surplus from one vertical
+cannot fill another vertical's quota; dual-route companies count once. Country
+diversity is a scheduling preference, not a new formal country quota.
+
+```bash
+python expand_buyer_sprint.py --source runs/discovery/raw.json \
+  --initial-prelock runs/prelock-rated-candidates.json \
+  --history runs/history/contacted.json --run-dir runs/selection \
+  --batch-size 75 --max-records 100 --max-reviews 20 --max-cycles 3 --pages 2
+# Resume using the same directory. Supply reviewed updates for the same company IDs:
+python expand_buyer_sprint.py --source runs/discovery/raw.json \
+  --initial-prelock runs/prelock-rated-candidates.json \
+  --history runs/history/contacted.json --run-dir runs/selection \
+  --review-evidence runs/reviewed-evidence.json
+```
+
+Default invocation limits: 100 new RAW, 20 REVIEW attempts, three cycles;
+contact screening uses at most two website pages. REVIEW collects at most two
+official pages and two buyer-query tests per attempt, reusing captured page
+evidence and cached tests. Reaching a budget saves `PROGRESS`; it does not mean
+the sources are exhausted. The RAW source file is never expanded by this command.
+
+`contacts[].human_reachability` has five states: `human_direct`, `human_transfer`,
+`automated_welcome`, `bot_only`, `unknown`. Positive states require dated,
+route-specific official evidence or an explicitly reviewed owned reply export.
+A transfer route is distinct from confirmed decision-maker access. Automated
+welcome and unknown routes stay in REVIEW; a company with only bot routes is
+rejected. The original links remain in `contacts` for audit.
+
+REVIEW follows the actual missing evidence: ownership/location pages, team size,
+official contact labels, or one/two representative buyer-query comparisons.
+The default query adapter captures a bounded Bing RSS result set with platform,
+date, scope, returned URLs and named competitors. Its absence observation applies
+only to that returned set; it is never an AI recommendation or ranking guarantee.
+Failed tests remain untested and are cached. Statements, names and team sizes
+are collected only when explicit. Unsupported facts stay missing. No new evidence
+parks the record immediately rather than replaying the same assessment three times.
+
+Reviewed evidence files are JSON arrays preserving `source_id`/identity,
+`company_name` and official website. Put structured updates in `prelock_assessment`
+and match each contact by channel plus its original `value` to add
+`human_reachability` evidence. Buyer query evidence includes `tested_at`,
+`platform`, `scope`, `evidence_urls`, `competitor_evidence`, `prospect_presence`
+and a bounded `visibility_gap`. Rating points still need their own traceable
+`rating_assessment`; missing points never earn a grade.
+
+Reports separate `this_run` (fresh RAW, REVIEW attempts and transitions),
+`current_totals` (current PASS/REVIEW/PARKED/REJECT inventory), and
+`cumulative_fresh_raw_scanned`. Expansion source conversion uses distinct screened
+companies as its denominator and updates after REVIEW transitions, including
+joint source/vertical/country segments. Raw pool size and screening coverage
+are reported separately. Historical aggregate reports remain separate priors.
+
+Formal selection solves industry quotas and the exact 24/6 assignment together,
+retaining the hard city cap and deterministic quality/source-diversity preferences.
+An existing Sample Lock is replayed without replacing its company identities.
+
+### Contact-first dual pools (single-batch runner)
 
 The 1,000+ RAW records are a discovery pool, not the final prospect list. A new
 run excludes history, resolves missing official websites only from explicit

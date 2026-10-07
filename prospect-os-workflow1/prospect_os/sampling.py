@@ -401,3 +401,94 @@ def stratified_sample(
 def sampling_record_key(row: dict[str, Any]) -> str:
     """Public key helper used by the enrichment runner's resume behavior."""
     return _record_key(row)
+
+
+def formal_sample(rows, *, seed=DEFAULT_SEED, city_cap=DEFAULT_CITY_CAP, node_budget=100_000):
+    """Find exact vertical + 24/6 channel quotas, retaining the hard city cap.
+
+    The reserve is small. Bounded backtracking avoids rejecting a feasible
+    cohort merely because a greedy pick discarded a needed Telegram route.
+    Source diversity and buyer grade remain deterministic ranking preferences.
+    """
+    from .source_scheduler import identity_aliases
+    unique, seen = [], set()
+    ranked = sorted(rows, key=lambda row: (
+        {"S": 0, "A": 1, "B": 2}.get(row.get("buyer_grade"), 9),
+        -int(row.get("buyer_priority_score") or 0), _random_rank(row, seed, "formal")))
+    for row in ranked:
+        if (row.get("prelock_status") != "PRELOCK_PASS" or row.get("buyer_grade") == "C"
+                or classify_vertical(row) not in FORMAL_30_QUOTAS
+                or not eligible_raw_record(row) or row.get("do_not_contact") is True
+                or row.get("chain") is True or identity_aliases(row) & seen):
+            continue
+        seen.update(identity_aliases(row))
+        unique.append({**row, "sampling_vertical": classify_vertical(row),
+                       "sampling_track": track_for_vertical(classify_vertical(row))})
+    buckets = {v: [row for row in unique if row["sampling_vertical"] == v] for v in FORMAL_30_QUOTAS}
+    needs = dict(FORMAL_30_QUOTAS)
+    cities, sources, selected = Counter(), Counter(), []
+    channels = {"whatsapp": 24, "telegram": 6}
+    starts = {v: 0 for v in needs}
+    nodes = 0
+
+    def routes(row):
+        value = row.get("reachable_contact_channels", row.get("available_contact_channels"))
+        return set(value if value is not None else [row.get("prelock_channel")]) & set(channels)
+
+    def search():
+        nonlocal nodes
+        nodes += 1
+        if nodes > node_budget:
+            return False
+        if not any(needs.values()):
+            return not any(channels.values())
+        available = {v: [(i, row) for i, row in enumerate(buckets[v]) if i >= starts[v]
+                         and cities[_city_key(row)] < city_cap and routes(row)] for v in needs if needs[v]}
+        if any(len(available[v]) < needs[v] for v in available):
+            return False
+        for channel, count in channels.items():
+            possible = sum(min(needs[v], sum(channel in routes(row) for _, row in available[v])) for v in available)
+            if possible < count:
+                return False
+        vertical = min(available, key=lambda v: (len(available[v]) / needs[v], list(needs).index(v)))
+        options = sorted(available[vertical], key=lambda pair: (
+            {"S": 0, "A": 1, "B": 2}.get(pair[1].get("buyer_grade"), 9),
+            -int(pair[1].get("buyer_priority_score") or 0), sources[_source_key(pair[1])], pair[0]))
+        for index, row in options:
+            for channel in sorted(routes(row), key=lambda ch: (0 if ch == "telegram" and channels[ch] else 1, ch)):
+                if not channels[channel]:
+                    continue
+                previous = starts[vertical]
+                starts[vertical] = index + 1
+                needs[vertical] -= 1
+                channels[channel] -= 1
+                cities[_city_key(row)] += 1
+                sources[_source_key(row)] += 1
+                selected.append({**row, "selected_contact_channel": channel, "prelock_channel": channel})
+                if search():
+                    return True
+                selected.pop()
+                sources[_source_key(row)] -= 1
+                cities[_city_key(row)] -= 1
+                channels[channel] += 1
+                needs[vertical] += 1
+                starts[vertical] = previous
+                if nodes > node_budget:
+                    return False
+        return False
+
+    found = search()
+    chosen = selected if found else []
+    by_vertical = Counter(row["sampling_vertical"] for row in chosen)
+    track_counts = Counter(row["sampling_track"] for row in chosen)
+    summary = {"seed": seed, "requested_limit": 30, "raw_pool": len(rows), "eligible_pool": len(unique),
+               "search_nodes": nodes, "search_status": "feasible" if found else (
+                   "search_budget_reached" if nodes > node_budget else "infeasible"),
+               "selected_by_vertical": {v: by_vertical[v] for v in VERTICALS},
+               "track_counts": {track: track_counts[track] for track in ("track_a", "track_b")},
+               "shortfall_by_vertical": {v: FORMAL_30_QUOTAS[v] - by_vertical[v] for v in FORMAL_30_QUOTAS},
+               "selected_by_contact_channel": dict(Counter(row["prelock_channel"] for row in chosen)),
+               "city_cap": city_cap, "source_soft_cap_share_per_track": DEFAULT_SOURCE_SHARE,
+               "source_selection": {source: {"count": count, "share": count / len(chosen)}
+                   for source, count in Counter(_source_key(row) for row in chosen).items()}, "telegram_cap": 6}
+    return chosen, summary

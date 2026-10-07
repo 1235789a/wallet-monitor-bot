@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlsplit, parse_qs
 
 from workflow1_company_screening import TextAndLinksParser, fetch_html
 from workflow1_daily import normalize_domain
-from prospect_os.sampling import (DEFAULT_SEED, FORMAL_30_QUOTAS, sampling_record_key,
+from prospect_os.sampling import (DEFAULT_SEED, FORMAL_30_QUOTAS, sampling_record_key, formal_sample,
                                   stratified_sample)
 from prospect_os.sample_lock import DEFAULT_LOCK, align_to_lock, freeze_sample, load_lock, verify_final_ids
 from prospect_os.history_exclusion import exclude_history
@@ -215,6 +215,7 @@ def run_batch(raw, *, limit, seed, output, summary_path, lock_path, enrich_fn=en
                                                   prefer_whatsapp=True, telegram_cap=telegram_cap)
             channel_assignment = None
             if limit == 30:
+                targets, summary = formal_sample(eligible_for_sample, seed=seed)
                 targets, channel_assignment = assign_contact_quota(
                     targets, seed=seed, required=RATING_CONFIG['formal_channels'])
                 pool_summary['contact_quota_assignment'] = channel_assignment

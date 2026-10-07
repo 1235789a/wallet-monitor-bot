@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 from urllib.robotparser import RobotFileParser
 
 from .source_pool import USER_AGENT, canonical_domain, public_http_url
+from .contact_reachability import published_reachability
 
 
 GENERIC_EMAIL_LOCALS = {
@@ -175,6 +176,10 @@ def _route_contact(channel: str, url: str, source_url: str, anchor_text: str) ->
             # Keep it out of the direct-chat pool until the official site's
             # surrounding label makes the intended route clear.
             route_type = "unverified_telegram_route"
+    evidence = _evidence(
+        f"Explicit {channel.title()} link is published on the supplied company website; ownership of the account is unverified.",
+        source_url,
+    )
     return {
         "channel": channel,
         "value": value,
@@ -183,10 +188,8 @@ def _route_contact(channel: str, url: str, source_url: str, anchor_text: str) ->
         "contact_belongs_to_decision_maker": False,
         "decision_access_confidence": "unknown",
         "role_hint": role_hint.group(1).casefold() if role_hint else "",
-        "evidence": _evidence(
-            f"Explicit {channel.title()} link is published on the supplied company website; ownership of the account is unverified.",
-            source_url,
-        ),
+        "evidence": evidence,
+        "human_reachability": published_reachability(anchor_text, evidence),
     }
 
 
@@ -263,6 +266,7 @@ def extract_contacts(page_url: str, page_html: str) -> dict[str, Any]:
         unique.setdefault(key, contact)
     return {
         "contacts": list(unique.values()),
+        "text": page_text[:12_000],
         "internal_links": list(dict.fromkeys(internal_links)),
         "internal_link_anchors": internal_link_anchors,
         "decision_role_terms_observed": sorted({match.group(1).casefold() for match in ROLE_PATTERN.finditer(page_text)}),
@@ -344,6 +348,7 @@ def enrich_record(
         "contact_enrichment_status": "not_run",
         "contact_enrichment_errors": [],
         "pages_checked": [],
+        "page_evidence": [],
     })
     if not public_http_url(website):
         result["contact_enrichment_status"] = "no_public_website_hint"
@@ -369,6 +374,9 @@ def enrich_record(
                 continue
             parsed = extract_contacts(final_url, body)
             result["pages_checked"].append(final_url)
+            result["page_evidence"].append({"url": final_url, "text": parsed["text"],
+                "internal_links": parsed["internal_links"][:50], "contacts": parsed["contacts"],
+                "checked_at": _checked_at(), "status": "ok"})
             for contact in parsed["contacts"]:
                 key = (str(contact.get("channel")), str(contact.get("value")).casefold().rstrip("/"))
                 contacts.setdefault(key, contact)
@@ -419,6 +427,7 @@ def enrich_record(
             time.sleep(delay_seconds)
 
     result["contacts"] = list(contacts.values())
+    result["contact_page_attempts"] = len(seen)
     result["decision_maker_candidates"] = role_evidence
     result["contact_enrichment_status"] = "completed" if result["pages_checked"] else "fetch_failed"
     result["contact_enriched_at"] = _checked_at()

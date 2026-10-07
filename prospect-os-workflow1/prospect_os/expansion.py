@@ -15,6 +15,9 @@ from .sampling import (
     FORMAL_30_QUOTAS, TRACK_A_VERTICALS, TRACK_B_VERTICALS,
     classify_vertical, sampling_record_key, track_for_vertical,
 )
+from .source_scheduler import country_key, identity_aliases, segment_key, source_key
+from .contact_pools import _usable_contact
+from .contact_reachability import route_summary
 
 RESERVE_POOL_TARGET = 42
 DEFAULT_BATCH_SIZE = 75
@@ -22,7 +25,7 @@ MAX_REVIEW_ATTEMPTS = 3
 CHANNEL_TARGETS = {"whatsapp": 24, "telegram": 6}
 REVIEW_REASON_ORDER = (
     "location_count_missing", "ownership_missing", "contact_route_uncertain",
-    "telegram_route_uncertain", "decision_maker_missing", "buyer_intent_missing",
+    "telegram_route_uncertain", "human_reachability_missing", "team_missing", "decision_maker_missing", "buyer_intent_missing",
     "visibility_gap_missing", "website_unresolved", "website_fetch_failed",
     "other_evidence_missing",
 )
@@ -31,6 +34,8 @@ REVIEW_ACTIONS = {
     "ownership_missing": "check official about page and independent ownership evidence",
     "contact_route_uncertain": "verify the official-site direct chat URL and route type",
     "telegram_route_uncertain": "verify that the Telegram profile is a direct user account, not a bot/group/channel",
+    "human_reachability_missing": "inspect the official route label or reviewed reply export for human access",
+    "team_missing": "inspect an official team page for an explicit small-team size",
     "decision_maker_missing": "check official team page and public founder/owner evidence",
     "buyer_intent_missing": "test one or two representative non-brand buyer queries",
     "visibility_gap_missing": "compare the representative buyer query with direct competitors",
@@ -60,14 +65,46 @@ def compute_required_slots(
     pass_records: list[dict[str, Any]], *, reserve_pool_target: int = RESERVE_POOL_TARGET,
 ) -> dict[str, Any]:
     """Recompute final-cohort gaps from PRELOCK_PASS records only."""
-    passed = [r for r in pass_records if r.get("prelock_status", r.get("prelock_icp_status")) == "PRELOCK_PASS"
-              or r.get("prelock_status") == "PASS"]
+    passed = []
+    seen = set()
+    for row in pass_records:
+        if (row.get("prelock_status") not in {"PRELOCK_PASS", "PASS"}
+                or row.get("buyer_grade") == "C" or row.get("do_not_contact") is True
+                or row.get("chain") is True or identity_aliases(row) & seen):
+            continue
+        seen.update(identity_aliases(row))
+        passed.append(row)
     vertical_counts: Counter[str] = Counter(classify_vertical(r) for r in passed)
-    track_counts: Counter[str] = Counter(
-        str(r.get("sampling_track") or track_for_vertical(classify_vertical(r))).casefold()
-        for r in passed
-    )
-    channel_counts: Counter[str] = Counter(_channel(r) for r in passed)
+    capped = {v: min(target, vertical_counts[v]) for v, target in FORMAL_30_QUOTAS.items()}
+    track_counts = Counter()
+    for vertical, count in capped.items():
+        track_counts[track_for_vertical(vertical)] += count
+    # Joint vertical/channel capacity: an overfilled vertical and a dual-route
+    # company must never satisfy two separate formal slots.
+    capacities = {}
+    plans = {(0, 0): {}}
+    for vertical, target in FORMAL_30_QUOTAS.items():
+        counts = Counter()
+        for row in passed:
+            if classify_vertical(row) != vertical:
+                continue
+            available = row.get("reachable_contact_channels", row.get("available_contact_channels"))
+            if available is None:
+                available = [_channel(row)]
+            channels = frozenset(ch for ch in available if ch in CHANNEL_TARGETS)
+            counts[channels] += 1
+        wa, tg, dual = counts[frozenset({"whatsapp"})], counts[frozenset({"telegram"})], counts[frozenset(CHANNEL_TARGETS)]
+        options = [(w, t) for w in range(target + 1) for t in range(min(target - w, 6) + 1)
+                   if max(0, w - wa) + max(0, t - tg) <= dual]
+        next_plans = {}
+        for (w0, t0), plan in plans.items():
+            for w, t in options:
+                if w0 + w <= 24 and t0 + t <= 6:
+                    next_plans.setdefault((w0 + w, t0 + t), {**plan, vertical: {"whatsapp": w, "telegram": t}})
+        plans = next_plans
+        capacities[vertical] = {"whatsapp": min(target, wa + dual), "telegram": min(target, tg + dual)}
+    channel_counts = max(plans, key=lambda pair: (sum(pair), pair[1]))
+    channels_filled = dict(zip(CHANNEL_TARGETS, channel_counts))
     return {
         "reserve_pool_target": reserve_pool_target,
         "reserve_pool_pass": len(passed),
@@ -79,9 +116,13 @@ def compute_required_slots(
             for vertical, target in FORMAL_30_QUOTAS.items()
         },
         "channel_shortfall": {
-            channel: max(0, target - channel_counts[channel])
+            channel: max(0, target - channels_filled[channel])
             for channel, target in CHANNEL_TARGETS.items()
         },
+        "formal_channel_capacity": channels_filled,
+        "by_vertical_channel": capacities,
+        "formal_channel_plan": plans[channel_counts],
+        "pass_by_country": dict(Counter(country_key(row) for row in passed)),
     }
 
 
@@ -105,7 +146,9 @@ def record_review_attempt(
 ) -> dict[str, Any]:
     """Advance one review attempt; park unresolved rows instead of blocking expansion."""
     attempts = int(row.get("review_attempts", 0)) + 1
-    result = dict(result or row)
+    result = {**row, **(result or {})}
+    if sampling_record_key(result) != sampling_record_key(row) or result.get("company_name") != row.get("company_name"):
+        raise ValueError("review repair changed company identity")
     status = str(result.get("prelock_status") or result.get("prelock_icp_status") or "PRELOCK_REVIEW")
     if status in {"PRELOCK_PASS", "PASS"}:
         return {**result, "prelock_status": "PRELOCK_PASS", "review_attempts": attempts,
@@ -113,13 +156,26 @@ def record_review_attempt(
     if status in {"PRELOCK_REJECT", "REJECT"}:
         return {**result, "prelock_status": "PRELOCK_REJECT", "review_attempts": attempts,
                 "next_review_action": None}
-    reason = str(result.get("review_reason") or row.get("review_reason") or "other_evidence_missing")
+    reason = review_reason(result)
     item = make_review_item(result, reason, attempts=attempts,
                             priority=row.get("review_priority"))
-    if attempts >= max_attempts:
+    if attempts >= max_attempts or result.get("review_evidence_changed") is False:
         item["prelock_status"] = "PRELOCK_PARKED"
         item["next_review_action"] = None
     return item
+
+
+def review_reason(row):
+    missing = " ".join(map(str, row.get("prelock_missing_evidence") or [])).casefold()
+    for token, reason in (("location", "location_count_missing"), ("ownership", "ownership_missing"),
+                          ("human_contact", "human_reachability_missing"), ("telegram", "telegram_route_uncertain"),
+                          ("direct_chat", "contact_route_uncertain"), ("team", "team_missing"),
+                          ("decision", "decision_maker_missing"), ("visibility", "visibility_gap_missing"),
+                          ("buyer", "buyer_intent_missing"), ("competitor", "buyer_intent_missing"),
+                          ("official_website", "website_unresolved"), ("website_live", "website_fetch_failed")):
+        if token in missing:
+            return reason
+    return str(row.get("review_reason") or "other_evidence_missing")
 
 
 def source_stop_reason(
@@ -220,238 +276,235 @@ def _merge_rows(current: list[dict[str, Any]], incoming: list[dict[str, Any]]) -
     return list(by_id.values())
 
 
+def inventory(state):
+    return {"pass": len(state["pass_records"]), "review": len(state["review_queue"]),
+            "parked": len(state["parked_records"]), "reject": len(state["rejected_records"])}
+
+
+def rebuild_source_yield(state):
+    """Current distinct-company outcomes, with screened companies as denominator."""
+    metrics = {}
+    rows = sum((state.get(key, []) for key in (
+        "pass_records", "review_queue", "parked_records", "rejected_records")), [])
+    for row in _merge_rows([], rows):
+        name = source_key(row)
+        source = metrics.setdefault(name, {"source_name": name, "denominator": "distinct_screened_companies",
+                                          "by_country": {}, "by_vertical": {}, "by_segment": {}})
+        buckets = [source, source["by_country"].setdefault(country_key(row), {}),
+                   source["by_vertical"].setdefault(classify_vertical(row), {}),
+                   source["by_segment"].setdefault(segment_key(row), {})]
+        routes = {channel: any(_usable_contact(c, channel, row.get("website_url"))
+                               for c in row.get("contacts", [])) for channel in CHANNEL_TARGETS}
+        # Compatibility for old outcome records without a contacts inventory.
+        if "contacts" not in row:
+            routes = {ch: row.get("prelock_channel") == ch for ch in CHANNEL_TARGETS}
+        humans = set(route_summary(row, _usable_contact)["reachable_contact_channels"])
+        status = str(row.get("prelock_status", "PRELOCK_REVIEW")).removeprefix("PRELOCK_").casefold()
+        for bucket in buckets:
+            additions = {"fresh_raw": 1, "screened_count": 1,
+                         "website_resolved": int(bool(row.get("website_url"))),
+                         "website_fetch_success": int(row.get("contact_enrichment_status") == "completed"),
+                         "website_fetch_failed": int(row.get("contact_enrichment_status") == "fetch_failed"),
+                         "whatsapp_found": int(routes["whatsapp"]), "telegram_found": int(routes["telegram"]),
+                         "human_whatsapp_found": int("whatsapp" in humans),
+                         "human_telegram_found": int("telegram" in humans),
+                         "prelock_pass": int(status == "pass"), "prelock_review": int(status == "review"),
+                         "prelock_parked": int(status == "parked"), "prelock_reject": int(status == "reject")}
+            for key, count in additions.items():
+                bucket[key] = bucket.get(key, 0) + count
+    for name, source in metrics.items():
+        for bucket in [source, *source["by_country"].values(), *source["by_vertical"].values(),
+                       *source["by_segment"].values()]:
+            n = bucket["screened_count"]
+            bucket.update(raw_count=n, pass_rate=round(bucket["prelock_pass"] / n, 4),
+                          whatsapp_yield=round(bucket["whatsapp_found"] / n, 4),
+                          telegram_yield=round(bucket["telegram_found"] / n, 4),
+                          website_resolution_rate=round(bucket["website_resolved"] / n, 4))
+            reason = source_stop_reason(bucket)
+            if reason:
+                bucket["source_stop_reason"] = reason
+        previous = state.get("source_yield", {}).get(name, {})
+        if previous.get("source_stop_reason") in {"source_returned_empty_batch", "duplicate_only_batch"}:
+            source["source_stop_reason"] = previous["source_stop_reason"]
+    # Retain explicit discovery stop decisions even if a source has no outcomes.
+    for name, old in state.get("source_yield", {}).items():
+        if name not in metrics and old.get("source_stop_reason"):
+            metrics[name] = {"source_name": name, "source_stop_reason": old["source_stop_reason"]}
+    state["source_yield"] = metrics
+    return metrics
+
+
 def run_expansion_loop(
-    *,
-    state_path: Path,
-    required_slots_path: Path,
-    source_yield_path: Path,
+    *, state_path: Path, required_slots_path: Path, source_yield_path: Path,
     discover_batch: Callable[..., dict[str, Any]],
     screen_and_preflight: Callable[[list[dict[str, Any]], dict[str, Any]], list[dict[str, Any]]],
     repair_review: Callable[[dict[str, Any], str], dict[str, Any]],
     sample_ready: Callable[[list[dict[str, Any]]], bool],
-    reserve_pool_target: int = RESERVE_POOL_TARGET,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    max_review_attempts: int = MAX_REVIEW_ATTEMPTS,
-    max_cycles: int | None = None,
+    reserve_pool_target: int = RESERVE_POOL_TARGET, batch_size: int = DEFAULT_BATCH_SIZE,
+    max_review_attempts: int = MAX_REVIEW_ATTEMPTS, max_cycles: int | None = None,
+    max_fresh_raw: int | None = None, max_review_records: int | None = None,
+    reviews_per_cycle: int = 10,
 ) -> dict[str, Any]:
-    """Keep discovering until sample-ready/exhausted; REVIEW never ends the run.
-
-    Callbacks must use existing discovery, history, website/contact and ICP/buyer-intent
-    implementations. All candidates and state are checkpointed after every batch.
-    """
-    if batch_size < 1 or batch_size > 100:
+    """Resume bounded batches; preserve every outcome and count repairs separately."""
+    if not 1 <= batch_size <= 100:
         raise ValueError("batch_size must be between 1 and 100")
+    if reviews_per_cycle < 1 or any(value is not None and value < 0 for value in (
+            max_cycles, max_fresh_raw, max_review_records)):
+        raise ValueError("execution budgets must be nonnegative; reviews_per_cycle must be positive")
     state_path, required_slots_path, source_yield_path = map(Path, (state_path, required_slots_path, source_yield_path))
     state = load_expansion_state(state_path, reserve_pool_target=reserve_pool_target)
-    if state.get("status") in {"SAMPLE_READY", "SOURCE_EXHAUSTED"}:
-        return state
+    initial = inventory(state)
+    usage = {"fresh_raw_processed": 0, "raw_to_pass": 0, "raw_to_review": 0, "raw_to_reject": 0,
+             "review_attempts": 0, "review_to_pass": 0, "review_to_parked": 0, "review_to_reject": 0,
+             "contact_cache_hits": 0, "website_page_attempts": 0}
+    state["this_run"] = usage
 
+    def checkpoint():
+        state["required_slots"] = compute_required_slots(state["pass_records"], reserve_pool_target=reserve_pool_target)
+        state["reserve_pool_pass"] = len(state["pass_records"])
+        state["current_totals"] = inventory(state)
+        state["rejected_count"] = len(state["rejected_records"])
+        state["review_queue_count"], state["parked"] = len(state["review_queue"]), len(state["parked_records"])
+        state["updated_at"] = utc_now()
+        rebuild_source_yield(state)
+        write_json_atomic(required_slots_path, state["required_slots"])
+        write_json_atomic(source_yield_path, state["source_yield"])
+        write_json_atomic(state_path, state)
+
+    def ready():
+        return len(state["pass_records"]) >= reserve_pool_target and sample_ready(state["pass_records"])
+
+    if state.get("status") in {"SAMPLE_READY", "SOURCE_EXHAUSTED"}:
+        checkpoint()
+        return state
+    state["status"] = "RUNNING"
     cycles = 0
     while max_cycles is None or cycles < max_cycles:
         cycles += 1
-        passes = state["pass_records"]
-        state["required_slots"] = compute_required_slots(passes, reserve_pool_target=reserve_pool_target)
-        write_json_atomic(required_slots_path, state["required_slots"])
-        if len(passes) >= reserve_pool_target and sample_ready(passes):
+        checkpoint()
+        if ready():
             state["status"] = "SAMPLE_READY"
             break
-
-        # Cheap repair first. Unresolved reviews are parked after the finite attempt budget.
-        queue = sorted(state["review_queue"], key=lambda r: (
-            int(r.get("review_priority", 99)), int(r.get("review_attempts", 0)),
-            sampling_record_key(r),
-        ))
-        state["review_queue"] = []
-        for item in queue:
-            if item.get("prelock_status") != "PRELOCK_REVIEW":
-                continue
+        budget = reviews_per_cycle
+        if max_review_records is not None:
+            budget = min(budget, max_review_records - usage["review_attempts"])
+        queue = sorted(state["review_queue"], key=lambda row: (
+            int(row.get("review_attempts", 0)), int(row.get("review_priority", 99)), sampling_record_key(row)))
+        attempted = queue[:max(0, budget)]
+        # Keep each item in the persisted queue until its own outcome is saved.
+        for item in attempted:
             try:
-                result = repair_review(item, str(item.get("next_review_action") or "inspect missing evidence"))
-                updated = record_review_attempt(item, result, max_attempts=max_review_attempts)
+                repaired = repair_review(item, str(item.get("next_review_action") or "inspect missing evidence"))
+                updated = record_review_attempt(item, repaired, max_attempts=max_review_attempts)
             except Exception as exc:
-                updated = record_review_attempt(item, {**item, "review_error": str(exc)},
-                                                max_attempts=max_review_attempts)
-            if updated["prelock_status"] == "PRELOCK_PASS":
-                state["pass_records"] = _merge_rows(state["pass_records"], [updated])
-            elif updated["prelock_status"] == "PRELOCK_REVIEW":
-                state["review_queue"].append(updated)
-            elif updated["prelock_status"] == "PRELOCK_PARKED":
-                state["parked_records"] = _merge_rows(state["parked_records"], [updated])
-            else:
-                state["rejected_count"] += 1
-                state["rejected_records"] = _merge_rows(state.get("rejected_records", []), [updated])
-        passes = state["pass_records"]
-        state["required_slots"] = compute_required_slots(passes, reserve_pool_target=reserve_pool_target)
-        if len(passes) >= reserve_pool_target and sample_ready(passes):
+                updated = record_review_attempt(item, {**item, "review_error": str(exc)}, max_attempts=max_review_attempts)
+            usage["review_attempts"] += 1
+            key = sampling_record_key(item)
+            state["review_queue"] = [row for row in state["review_queue"] if sampling_record_key(row) != key]
+            status = updated["prelock_status"]
+            target = {"PRELOCK_PASS": "pass_records", "PRELOCK_REVIEW": "review_queue",
+                      "PRELOCK_PARKED": "parked_records", "PRELOCK_REJECT": "rejected_records"}[status]
+            state[target] = _merge_rows(state[target], [updated])
+            if status != "PRELOCK_REVIEW":
+                usage[{"PRELOCK_PASS": "review_to_pass", "PRELOCK_PARKED": "review_to_parked",
+                       "PRELOCK_REJECT": "review_to_reject"}[status]] += 1
+            checkpoint()
+        if ready():
             state["status"] = "SAMPLE_READY"
             break
-
+        remaining_budget = batch_size if max_fresh_raw is None else min(batch_size, max_fresh_raw - usage["fresh_raw_processed"])
+        if remaining_budget <= 0:
+            state.update(status="PROGRESS", pause_reason="fresh_raw_budget_reached")
+            break
         stopped = {name for name, metrics in state["source_yield"].items() if metrics.get("source_stop_reason")}
-        order = rank_sources(state["source_yield"], stopped)
         try:
-            batch = discover_batch(
-                required_slots=state["required_slots"], preferred_sources=order,
-                stopped_sources=sorted(stopped), batch_size=batch_size,
-            )
+            batch = discover_batch(required_slots=state["required_slots"],
+                preferred_sources=rank_sources(state["source_yield"], stopped),
+                stopped_sources=sorted(stopped), batch_size=remaining_budget)
         except Exception as exc:
             state.update(status="EXECUTION_BLOCKED", blocked_reason=str(exc))
             break
-
-        rows = batch.get("records") or []
         source = str(batch.get("source_name") or "unknown_source")
-        if source not in state["sources_attempted"]:
-            state["sources_attempted"].append(source)
+        rows = batch.get("records") or []
         if not rows:
-            state["source_exhausted"] = bool(batch.get("all_sources_exhausted"))
-            if state["source_exhausted"] and source_exhausted_criteria(state):
-                state["status"] = "SOURCE_EXHAUSTED"
-                break
             state["last_batch_result"] = {"source_name": source, "fresh_raw": 0,
-                                          "note": "no rows returned; switch source or resume after adding sources"}
-            if state["source_exhausted"]:
-                # Keep a nonterminal checkpoint if the candidate-source registry is
-                # exhausted before the evidence-based SOURCE_EXHAUSTED threshold.
-                state["status"] = "PROGRESS"
+                                           "note": "no new eligible RAW in supplied pool"}
+            if batch.get("all_sources_exhausted"):
+                # Give remaining targeted reviews their bounded budget even
+                # when RAW is empty; lack of RAW must not discard that queue.
+                if attempted and state["review_queue"] and (max_review_records is None or usage["review_attempts"] < max_review_records):
+                    continue
+                state["status"] = "SOURCE_EXHAUSTED" if source_exhausted_criteria(state) else "PROGRESS"
+                state["pause_reason"] = "supplied_raw_pool_exhausted"
                 break
-            state["source_yield"].setdefault(source, {"source_name": source})[
-                "source_stop_reason"] = "source_returned_empty_batch"
-            state["status"] = "RUNNING"
-            write_json_atomic(state_path, state)
+            state["source_yield"].setdefault(source, {"source_name": source})["source_stop_reason"] = "source_returned_empty_batch"
             continue
-
-        processed_ids = set(state.get("processed_record_keys", [])) | {
-            sampling_record_key(x) for x in state["pass_records"]
-                         + state["review_queue"] + state["parked_records"]
-                         + state.get("rejected_records", [])}
-        fresh_rows = [r for r in rows if sampling_record_key(r) not in processed_ids]
-        if not fresh_rows:
-            state["last_batch_result"] = {"source_name": source, "fresh_raw": 0,
-                                          "note": "batch contained only already processed identities"}
-            state["source_yield"].setdefault(source, {"source_name": source})[
-                "source_stop_reason"] = "duplicate_only_batch"
-            state["status"] = "RUNNING"
-            write_json_atomic(state_path, state)
+        prior_rows = sum((state[key] for key in ("pass_records", "review_queue", "parked_records", "rejected_records")), [])
+        aliases = set().union(*(identity_aliases(row) for row in prior_rows)) if prior_rows else set()
+        processed = set(state["processed_record_keys"])
+        fresh = []
+        for row in rows:
+            if sampling_record_key(row) in processed or identity_aliases(row) & aliases:
+                continue
+            fresh.append({**row, "expansion_source_key": source_key(row) if source == "mixed_raw" else source})
+            aliases.update(identity_aliases(row))
+        if len(fresh) > remaining_budget:
+            state.update(status="EXECUTION_BLOCKED", blocked_reason="discovery exceeded requested batch budget")
+            break
+        if not fresh:
+            state["source_yield"].setdefault(source, {"source_name": source})["source_stop_reason"] = "duplicate_only_batch"
             continue
         try:
-            screened = screen_and_preflight(fresh_rows, state["required_slots"])
-            if not isinstance(screened, list):
-                raise TypeError("screen_and_preflight must return a list")
+            screened = screen_and_preflight(fresh, state["required_slots"])
+            expected = {sampling_record_key(row): row for row in fresh}
+            if (not isinstance(screened, list) or len(screened) != len(fresh)
+                    or {sampling_record_key(row) for row in screened} != set(expected)
+                    or any(row.get("company_name") != expected[sampling_record_key(row)].get("company_name") for row in screened)):
+                raise ValueError("screen/preflight must return exactly one unchanged identity per RAW company")
         except Exception as exc:
             state.update(status="EXECUTION_BLOCKED", blocked_reason=str(exc))
             break
-        if {sampling_record_key(r) for r in screened} - {sampling_record_key(r) for r in fresh_rows}:
-            raise ValueError("screen/preflight introduced a company outside the RAW batch")
-        # Persist all completed outcomes, including REJECT. This prevents a
-        # resume from re-counting or re-fetching rows merely because they were
-        # not retained in the review/pass queues.
-        state["processed_record_keys"] = sorted(
-            set(state.get("processed_record_keys", []))
-            | {sampling_record_key(row) for row in fresh_rows}
-        )
-
-        metrics = state["source_yield"].setdefault(source, {
-            "source_name": source, "fresh_raw": 0, "website_resolved": 0,
-            "website_fetch_success": 0, "website_fetch_failed": 0,
-            "whatsapp_found": 0, "telegram_found": 0, "prelock_pass": 0,
-            "prelock_review": 0, "prelock_reject": 0, "prelock_parked": 0,
-        })
-        batch_counts = Counter()
-        for row in screened:
-            status = str(row.get("prelock_status") or row.get("prelock_icp_status") or "PRELOCK_REVIEW")
-            country = str(row.get("country") or row.get("country_code") or "unknown")
-            vertical = classify_vertical(row)
-            country_stats = metrics.setdefault("by_country", {}).setdefault(country, {
-                "fresh_raw": 0, "website_resolved": 0, "whatsapp_found": 0,
-                "telegram_found": 0, "prelock_pass": 0, "prelock_review": 0,
-                "prelock_reject": 0,
-            })
-            vertical_stats = metrics.setdefault("by_vertical", {}).setdefault(vertical, {
-                "fresh_raw": 0, "website_resolved": 0, "whatsapp_found": 0,
-                "telegram_found": 0, "prelock_pass": 0, "prelock_review": 0,
-                "prelock_reject": 0,
-            })
-            channels_found = {
-                "whatsapp_found": bool(row.get("whatsapp_route") or row.get("whatsapp_url")
-                                       or row.get("prelock_channel") == "whatsapp"),
-                "telegram_found": bool(row.get("telegram_route") or row.get("telegram_url")
-                                       or row.get("prelock_channel") == "telegram"),
-            }
-            website_resolved = bool(row.get("website_url")) and row.get("website_resolution_status") != "unresolved"
-            website_status = str(row.get("website_fetch_status") or row.get("contact_enrichment_status")
-                                 or row.get("research_status") or "")
-            fetch_success = website_status in {"ok", "success", "completed", "pages_collected"}
-            fetch_failed = website_status in {"fetch_failed", "website_fetch_failed"}
-            for bucket in (country_stats, vertical_stats):
-                bucket["fresh_raw"] += 1
-                bucket["website_resolved"] += int(website_resolved)
-                for channel, found in channels_found.items():
-                    bucket[channel] += int(found)
+        counts = Counter()
+        for original in screened:
+            row = {**original, "expansion_source_key": expected[sampling_record_key(original)]["expansion_source_key"]}
+            status = str(row.get("prelock_status") or "PRELOCK_REVIEW")
             if status in {"PASS", "PRELOCK_PASS"}:
                 row["prelock_status"] = "PRELOCK_PASS"
                 state["pass_records"] = _merge_rows(state["pass_records"], [row])
-                metrics["prelock_pass"] += 1; batch_counts["prelock_pass"] += 1
-                country_stats["prelock_pass"] += 1; vertical_stats["prelock_pass"] += 1
+                counts["prelock_pass"] += 1
             elif status in {"REJECT", "PRELOCK_REJECT"}:
-                metrics["prelock_reject"] += 1; batch_counts["prelock_reject"] += 1
-                country_stats["prelock_reject"] += 1; vertical_stats["prelock_reject"] += 1
-                state["rejected_count"] += 1
-                state["rejected_records"] = _merge_rows(state.get("rejected_records", []), [row])
+                row["prelock_status"] = "PRELOCK_REJECT"
+                state["rejected_records"] = _merge_rows(state["rejected_records"], [row])
+                counts["prelock_reject"] += 1
             else:
-                item = make_review_item(row, str(row.get("review_reason") or "other_evidence_missing"),
-                                        attempts=int(row.get("review_attempts", 0)))
+                item = make_review_item(row, review_reason(row), attempts=int(row.get("review_attempts", 0)))
                 state["review_queue"] = _merge_rows(state["review_queue"], [item])
-                metrics["prelock_review"] += 1; batch_counts["prelock_review"] += 1
-                country_stats["prelock_review"] += 1; vertical_stats["prelock_review"] += 1
-            metrics["website_resolved"] += int(website_resolved)
-            metrics["website_fetch_success"] += int(fetch_success)
-            metrics["website_fetch_failed"] += int(fetch_failed)
-            metrics["whatsapp_found"] += int(channels_found["whatsapp_found"])
-            metrics["telegram_found"] += int(channels_found["telegram_found"])
-        metrics["fresh_raw"] += len(fresh_rows)
-        metrics["raw_count"] = metrics["fresh_raw"]
-        metrics["pass_rate"] = round(metrics["prelock_pass"] / metrics["fresh_raw"], 4)
-        metrics["whatsapp_yield"] = round(metrics["whatsapp_found"] / metrics["fresh_raw"], 4)
-        metrics["telegram_yield"] = round(metrics["telegram_found"] / metrics["fresh_raw"], 4)
-        metrics["website_resolution_rate"] = round(metrics["website_resolved"] / metrics["fresh_raw"], 4)
-        reason = source_stop_reason(metrics)
-        if reason:
-            metrics["source_stop_reason"] = reason
-
-        state["fresh_raw_scanned"] += len(fresh_rows)
-        state["reserve_pool_pass"] = len(state["pass_records"])
-        record = {"source_name": source, "fresh_raw": len(fresh_rows),
-                  "prelock_pass": batch_counts["prelock_pass"],
-                  "prelock_review": batch_counts["prelock_review"],
-                  "prelock_reject": batch_counts["prelock_reject"],
+                counts["prelock_review"] += 1
+            name = row["expansion_source_key"]
+            if name not in state["sources_attempted"]:
+                state["sources_attempted"].append(name)
+            usage["contact_cache_hits"] += int(row.get("contact_cache_hit", False))
+            usage["website_page_attempts"] += int(row.get("contact_page_attempts", 0))
+        state["processed_record_keys"] = sorted(processed | set(expected))
+        state["fresh_raw_scanned"] += len(fresh)
+        usage["fresh_raw_processed"] += len(fresh)
+        for key, counter in (("raw_to_pass", "prelock_pass"), ("raw_to_review", "prelock_review"), ("raw_to_reject", "prelock_reject")):
+            usage[key] += counts[counter]
+        record = {"source_name": source, "source_names": sorted({row["expansion_source_key"] for row in fresh}),
+                  "fresh_raw": len(fresh), **{key: counts[key] for key in ("prelock_pass", "prelock_review", "prelock_reject")},
                   "completed_at": utc_now()}
         state["batch_history"].append(record)
-        state["consecutive_low_yield_batches"] = (
-            int(state.get("consecutive_low_yield_batches", 0)) + 1
-            if record["prelock_pass"] <= 1 else 0
-        )
         state["last_batch_result"] = record
-        state["updated_at"] = utc_now()
-        state["required_slots"] = compute_required_slots(
-            state["pass_records"], reserve_pool_target=reserve_pool_target)
-        if len(state["pass_records"]) >= reserve_pool_target and sample_ready(state["pass_records"]):
+        checkpoint()
+        if ready():
             state["status"] = "SAMPLE_READY"
             break
         if batch.get("all_sources_exhausted") and source_exhausted_criteria(state):
             state["status"] = "SOURCE_EXHAUSTED"
             break
-        state["status"] = "RUNNING"
-
-        write_json_atomic(required_slots_path, state["required_slots"])
-        write_json_atomic(source_yield_path, state["source_yield"])
-        write_json_atomic(state_path, state)
-
-    state["review_queue_count"] = len(state["review_queue"])
-    state["parked"] = len(state["parked_records"])
-    state["terminal_status"] = state.get("status") if state.get("status") in {
-        "SAMPLE_READY", "SOURCE_EXHAUSTED", "EXECUTION_BLOCKED"
-    } else None
-    state["updated_at"] = utc_now()
-    write_json_atomic(required_slots_path, state["required_slots"])
-    write_json_atomic(source_yield_path, state["source_yield"])
-    write_json_atomic(state_path, state)
+    if state["status"] == "RUNNING":
+        state.update(status="PROGRESS", pause_reason="cycle_budget_reached")
+    state["terminal_status"] = state["status"] if state["status"] in {"SAMPLE_READY", "SOURCE_EXHAUSTED", "EXECUTION_BLOCKED"} else None
+    state["this_run_inventory_change"] = {key: inventory(state)[key] - initial[key] for key in initial}
+    checkpoint()
     return state

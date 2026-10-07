@@ -44,7 +44,7 @@ Each P0 must have:
 7. An official public email, direct WhatsApp/TG business route or verified founder social profile.
 8. A specific, permission-based opener. Generate and review it with
    [outreach-message-policy.md](outreach-message-policy.md) and the
-   [geo-outreach-copy Skill](../.codex/skills/geo-outreach-copy/SKILL.md). No outreach is sent automatically.
+   [geo-outreach-copy Skill](../../.codex/skills/geo-outreach-copy/SKILL.md). No outreach is sent automatically.
 
 Weights: acquisition investment 25, buyer value 15, tested visibility gap 25, decision access 15,
 delivery fit 10, recent activity 8 and USDT 2. USDT is a bonus only. A score is a review priority,
@@ -85,6 +85,16 @@ exist for honest calibration.
   caches; never re-fetch completed records without an explicit refresh reason.
 - Route every `PRELOCK_REVIEW` into a priority queue. Repair only missing evidence, at most three
   attempts. Park unresolved records and continue the next candidate/source.
+- Prioritize existing RAW by joint source × vertical × country human-channel yield and balance
+  country/source exposure in each batch. Global chat counts must not override a missing vertical.
+- Default budgets: 100 new RAW, 20 REVIEW attempts and three cycles per invocation; screening
+  is bounded to two pages per company. Budget exhaustion saves `PROGRESS` for resume.
+- Repair missing official ownership/location/team/contact statements or at most two dated, scoped
+  buyer-query comparisons. Cache captured evidence and failures. Park immediately when no new
+  evidence is available. Generic WA, automated welcome and unknown human access stay in REVIEW;
+  bot-only routes do not enter the formal sample. Human transfer is separate from decision access.
+- Keep per-invocation new outcomes, REVIEW transitions and current inventory totals separate.
+  Source pass rates use distinct screened companies and update when REVIEW becomes PASS or PARKED.
 - Stop a single source after 30–50 fresh records with no valid direct chat, website resolution below
   15% after 50, zero `PRELOCK_PASS` after 50, or a majority of stale/closed/chain/non-ICP records.
   Record the reason and switch to another permitted off-search source.

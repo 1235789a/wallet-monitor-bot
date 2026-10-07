@@ -14,10 +14,18 @@ from research_buyer_batch import run_batch
 
 class ContactPoolTests(unittest.TestCase):
     @staticmethod
+    def human_route(row):
+        return {'state': 'human_direct', 'evidence': {
+            'source_url': row['website_url'], 'checked_at': '2026-09-29T00:00:00Z',
+            'label': 'self_reported', 'claim': 'The official route explicitly offers access to a human.'}}
+
+    @staticmethod
     def evidence(row, *, reject=False):
         track_b = row.get('industry_hint') in {'vape', 'wine', 'adult retail shop'}
         query = {'query': 'best blockchain implementation company' if not track_b else 'best local vape shop',
                  'tested': True, 'buyer_intent': True,
+                 'tested_at': '2026-09-29T00:00:00Z', 'platform': 'bing', 'scope': 'first 10 fixture results',
+                 'visibility_gap': True, 'prospect_presence': 'not_in_returned_results',
                  'competitor_evidence': 'Observed relevant competitor or substitute',
                  'evidence_urls': [row['website_url'] + '/market']}
         dims = {'buyer_intent': 15, 'geo_opportunity': 10,
@@ -95,7 +103,8 @@ class ContactPoolTests(unittest.TestCase):
                 'prelock_assessment': self.evidence(row), 'contacts': [{
                 'channel': channel, 'value': value,
                 'route_type': 'direct_chat' if channel == 'telegram' else 'business_chat',
-                'evidence': {'source_url': row['website_url']}}]}
+                'evidence': {'source_url': row['website_url']},
+                'human_reachability': self.human_route(row)}]}
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             options = dict(limit=30, seed=3, output=root/'enriched.json',
@@ -134,7 +143,8 @@ class ContactPoolTests(unittest.TestCase):
                 'prelock_assessment': self.evidence(row), 'contacts': [{
                 'channel': 'whatsapp' if i < 2 else 'email',
                 'value': 'https://wa.me/12345678' if i < 2 else 'info@company.example',
-                'evidence': {'source_url': row['website_url']}}]}
+                'evidence': {'source_url': row['website_url']},
+                'human_reachability': self.human_route(row)}]}
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             with self.assertRaisesRegex(ValueError, 'prelock sample infeasible'):
@@ -167,7 +177,8 @@ class ContactPoolTests(unittest.TestCase):
                     'contacts': [{'channel': route,
                         'value': 'https://t.me/directuser' if route == 'telegram' else 'https://wa.me/12345678',
                         'route_type': 'direct_chat' if route == 'telegram' else 'business_chat',
-                        'evidence': {'source_url': row['website_url']}}]}
+                        'evidence': {'source_url': row['website_url']},
+                'human_reachability': self.human_route(row)}]}
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -347,7 +358,8 @@ class ContactPoolTests(unittest.TestCase):
             return {**item, 'contact_enrichment_status': 'completed', 'pages_checked': [item['website_url']],
                 'prelock_assessment': self.evidence(item, reject=True), 'contacts': [{
                     'channel': 'whatsapp', 'value': 'https://wa.me/12345678', 'route_type': 'business_chat',
-                    'evidence': {'source_url': item['website_url']}}]}
+                    'evidence': {'source_url': item['website_url']},
+                    'human_reachability': self.human_route(item)}]}
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             from prospect_os.sampling import stratified_sample as real_sampler
@@ -373,7 +385,8 @@ class ContactPoolTests(unittest.TestCase):
             return {**item, 'contact_enrichment_status': 'completed', 'pages_checked': [item['website_url']],
                 'prelock_assessment': self.evidence(item), 'contacts': [{
                     'channel': 'whatsapp', 'value': 'https://wa.me/12345678', 'route_type': 'business_chat',
-                    'evidence': {'source_url': item['website_url']}}]}
+                    'evidence': {'source_url': item['website_url']},
+                    'human_reachability': self.human_route(item)}]}
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             rows, summary = run_batch(rows_in, limit=2, seed=1, output=root/'enriched.json',

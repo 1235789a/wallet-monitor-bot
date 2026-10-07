@@ -8,6 +8,7 @@ from typing import Any
 
 from .contact_pools import _usable_contact
 from .sampling import classify_vertical
+from .contact_reachability import route_summary
 
 
 def _domain(value: Any) -> str:
@@ -45,6 +46,7 @@ def build_source_yield(raw_rows: list[dict[str, Any]], excluded_rows: list[dict[
         "website_fetch_failed": 0, "whatsapp_found": 0, "telegram_found": 0,
         "email_found": 0, "chat_found": 0, "review_count": 0,
         "prelock_pass_count": 0, "prelock_review_count": 0, "prelock_reject_count": 0,
+        "screened_count": 0, "human_whatsapp_found": 0, "human_telegram_found": 0,
     })
     for row in raw_rows:
         key = _group(row)
@@ -64,6 +66,7 @@ def build_source_yield(raw_rows: list[dict[str, Any]], excluded_rows: list[dict[
     for row in screened_rows:
         key = _group(row)
         counts = groups[key]
+        counts["screened_count"] += 1
         source_row = next((raw_by_identity[(field, str(row[field]))]
                            for field in ("identity_key", "source_id")
                            if row.get(field) and (field, str(row[field])) in raw_by_identity), row)
@@ -86,6 +89,9 @@ def build_source_yield(raw_rows: list[dict[str, Any]], excluded_rows: list[dict[
             counts["telegram_found"] += 1
         if whatsapp or telegram:
             counts["chat_found"] += 1
+        human_channels = route_summary(row, _usable_contact)["reachable_contact_channels"]
+        counts["human_whatsapp_found"] += int("whatsapp" in human_channels)
+        counts["human_telegram_found"] += int("telegram" in human_channels)
         if any(_usable_contact(c, "email", row.get("website_url")) for c in contacts):
             counts["email_found"] += 1
         if row.get("prelock_pool") == "review" or row.get("prelock_status") == "PRELOCK_REVIEW":
@@ -100,6 +106,7 @@ def build_source_yield(raw_rows: list[dict[str, Any]], excluded_rows: list[dict[
     results = []
     for (source, dataset, country, vertical), counts in sorted(groups.items()):
         raw_count = counts["raw_count"]
+        screened_count = counts["screened_count"]
         results.append({
             "source": source,
             "source_name": source,
@@ -108,10 +115,12 @@ def build_source_yield(raw_rows: list[dict[str, Any]], excluded_rows: list[dict[
             "country": country,
             "sampling_vertical": vertical,
             **counts,
-            "whatsapp_yield_rate": counts["whatsapp_found"] / raw_count if raw_count else 0.0,
-            "chat_yield_rate": counts["chat_found"] / raw_count if raw_count else 0.0,
+            "yield_denominator": "screened_count",
+            "screening_coverage": screened_count / raw_count if raw_count else 0.0,
+            "whatsapp_yield_rate": counts["whatsapp_found"] / screened_count if screened_count else 0.0,
+            "chat_yield_rate": counts["chat_found"] / screened_count if screened_count else 0.0,
             "website_yield_rate": min(1.0, (counts["website_already_present"] + counts["website_resolved"]) / raw_count) if raw_count else 0.0,
-            "prelock_pass_rate": counts["prelock_pass_count"] / raw_count if raw_count else 0.0,
+            "prelock_pass_rate": counts["prelock_pass_count"] / screened_count if screened_count else 0.0,
         })
     return {"schema_version": 1, "groups": results,
             "note": "Descriptive source prioritization only; ICP qualification is unchanged."}

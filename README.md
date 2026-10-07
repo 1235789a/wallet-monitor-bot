@@ -1,7 +1,16 @@
-# LocalBiz Prospect OS
+# Prospect OS — Buyer-Intent Lead Qualification
 
-Evidence-first operating system for small, lawful local-business prospecting,
-reply validation, purchase-intent measurement, and USDT payment confirmation.
+Evidence-first prospecting for small Web3/software B2B companies and lawful independent
+retail businesses. Prioritize existing RAW by industry, channel and country gaps,
+verify human chat reachability and repair missing qualification evidence.
+
+The formal cohort is **30 companies: Track A/B 15/15, 24 WhatsApp + 6 Telegram**,
+selected from at least 42 distinct eligible reserves. Chat links, human access and
+decision-maker access are verified separately. Budgeted, resumable screening and
+per-run/source conversion reports keep acquisition costs and progress visible.
+
+Start with the [Prospect OS workflow](prospect-os-workflow1/README.md) and its
+[current operating policy](prospect-os-workflow1/system/buyer-intent-sprint.md).
 
 The original wallet-monitor bot remains a subsystem under this repository. It
 is no longer the repository's overall product name.
