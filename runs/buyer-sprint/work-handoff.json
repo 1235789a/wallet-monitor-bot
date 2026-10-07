@@ -1,0 +1,106 @@
+{
+  "schema": "prospect-os-work-handoff-v1",
+  "created_date": "2026-09-26",
+  "repository": "1235789a/wallet-monitor-bot",
+  "branch": "agent/buyer-intent-sprint",
+  "module": "prospect-os-workflow1",
+  "base_head": "f36e0c6 Speed up contact route pre-screening",
+  "push_performed": false,
+  "goal": {
+    "original_task": "Expand the source-first raw company pool, then continue a 30-company buyer-intent sprint targeting 24 verified WhatsApp routes, Telegram capped at 6, and balanced Track A / Track B coverage. Keep email-qualified prospects in a separate pool. Do not relax quality gates.",
+    "track_a": "Founder-led Web3, AI, SaaS, high-ticket B2B",
+    "track_b": "Independent legal advertising-limited retail, including vape/tobacco, alcohol and adult businesses",
+    "quality_gates": "Apply history/client/peer exclusions, confirm company and website, ownership/independence and recent commercial activity, buyer intent, competitor gap and a verified public decision-maker route. RAW rows are candidates, not qualified prospects."
+  },
+  "completed_counts": {
+    "base_raw": 1222,
+    "new_rows_before_dedupe": 10297,
+    "new_rows_after_dedupe": 10281,
+    "identity_dedupe_removed": 16,
+    "combined_raw": 11501,
+    "new_records_by_source": {
+      "ny_tobacco_vapor_registry": 8428,
+      "yc_oss_api": 1529,
+      "near_ecosystem_github": 324
+    },
+    "history_excluded": 66,
+    "eligible_after_history": 11435,
+    "prelock_cache_lines": 2180,
+    "prelock_cache_unique_keys": 2180,
+    "prelock_status_counts": {
+      "fetch_failed": 983,
+      "completed": 1197
+    },
+    "remaining_website_checks_estimate": 219,
+    "sample_lock_created": false
+  },
+  "processed_sources": {
+    "yc_api_project": "https://github.com/yc-oss/api",
+    "yc_endpoint_counts": {
+      "hiring": 1482,
+      "industry-b2b": 3182,
+      "industry-banking-and-exchange": 73,
+      "industry-fintech": 662,
+      "industry-payments": 122,
+      "industry-security": 122,
+      "tag-ai": 893,
+      "tag-crypto-web3": 94,
+      "tag-cybersecurity": 52,
+      "tag-developer-tools": 556,
+      "tag-generative-ai": 256,
+      "tag-privacy": 20,
+      "tag-saas": 1099
+    },
+    "near_ecosystem_url": "https://raw.githubusercontent.com/near/ecosystem/main/entities.json",
+    "near_rows": 384,
+    "near_rows_with_websites": 332,
+    "ny_catalog_url": "https://catalog.data.gov/dataset/registered-retail-dealers-of-cigarettes-and-tobacco-products-and-vapor-products",
+    "ny_data_url": "https://data.ny.gov/api/v3/views/55xf-9jat/export.csv?accessType=DOWNLOAD",
+    "ny_license_rows": 8436,
+    "ny_distinct_name_location_rows": 8428,
+    "source_snapshots_directory": "runs/buyer-sprint/2026-09-26-pool-expansion/sources",
+    "manifest": "runs/buyer-sprint/2026-09-26-pool-expansion/raw-expanded.json.manifest.json"
+  },
+  "not_yet_processed": {
+    "new_discovery_queries": "No search-engine discovery queries were run; no other source endpoint was selected in this run.",
+    "remaining_existing_pool_checks": "About 219 website checks remain from the current source/history/cache state.",
+    "ny_registry_followup": "Resolve registry businesses to sites and ownership; license phone is not proof of WhatsApp.",
+    "lead_qualification": "Buyer-intent queries, competitor-gap evidence, recent activity, ownership/independence and direct contact route validation remain."
+  },
+  "files": {
+    "created": [
+      "runs/buyer-sprint/work-handoff.json",
+      "runs/buyer-sprint/WORK_HANDOFF.md"
+    ],
+    "raw_expansion": "runs/buyer-sprint/2026-09-26-pool-expansion/",
+    "related_runs": [
+      "runs/buyer-sprint/2026-09-25-dual-pools/",
+      "runs/buyer-sprint/2026-09-26-deep-contact/"
+    ],
+    "modified_module": [
+      "prospect-os-workflow1/prospect_os/contact_enrichment.py",
+      "prospect-os-workflow1/prospect_os/contact_pools.py",
+      "prospect-os-workflow1/research_buyer_batch.py",
+      "prospect-os-workflow1/test_contact_enrichment.py",
+      "prospect-os-workflow1/test_contact_pools.py"
+    ],
+    "missing_final_outputs": [
+      "enriched.json",
+      "prelock-chat.json",
+      "prelock-email.json",
+      "prelock-email_review.json",
+      "prelock-review.json",
+      "sampling-summary.json",
+      "excluded-history.json",
+      "sampled-lock.json"
+    ]
+  },
+  "command_run": "From prospect-os-workflow1/: python -u research_buyer_batch.py --source ../runs/buyer-sprint/2026-09-26-pool-expansion/raw-expanded.json --history-used ../runs/buyer-sprint/2026-09-24-1222/history-used-minimal.json --previous-contacted ../runs/buyer-sprint/discovery/west-yorkshire-2026-09-24/previously-contacted-from-session.json --previous-contacted ../runs/buyer-sprint/2026-09-26-deep-contact/supplemental-current-clients.json --previous-sample-lock ../runs/buyer-sprint/2026-09-24-1222/sampled-lock.json --limit 30 --min-whatsapp 24 --telegram-cap 6 --prelock-workers 24 --prelock-pages 2 --output ../runs/buyer-sprint/2026-09-26-pool-expansion/enriched.json --sample-lock ../runs/buyer-sprint/2026-09-26-pool-expansion/sampled-lock.json --sampling-summary ../runs/buyer-sprint/2026-09-26-pool-expansion/sampling-summary.json --excluded-history ../runs/buyer-sprint/2026-09-26-pool-expansion/excluded-history.json",
+  "blockers": [
+    "Pre-screen stopped before pool classification and sampling completed; 2,180 cache rows are intact.",
+    "An attempted process poll later hit an automatic approval-review usage-limit error and did not execute.",
+    "No active research_buyer_batch.py process was found at checkpoint.",
+    "Raw expansion is not a qualified lead list; many NY registry location rows have no website resolution."
+  ],
+  "next_action_for_another_agent": "Only after the user authorizes continuation, rerun the exact command above using the existing raw-expanded.json and prelock-screen.jsonl. Do not fetch sources again or rebuild RAW. Finish pre-screen, examine separate chat/email pools, then continue qualification while preserving the 30 / 24 WhatsApp / 6 Telegram-cap / track-balance requirements; report any shortfall."
+}

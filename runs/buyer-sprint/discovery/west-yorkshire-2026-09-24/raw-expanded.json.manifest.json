@@ -1,0 +1,21 @@
+{
+  "schema": "prospect-os-source-pool-v1",
+  "generated_at": "2026-09-24T07:36:35+00:00",
+  "record_count": 1222,
+  "sources": [
+    "None",
+    "openwinemap_osm",
+    "west_yorkshire_osm_snapshot"
+  ],
+  "inputs": [
+    "runs/buyer-sprint/raw-merged.json",
+    "scratch/runs/buyer-sprint/discovery/new-directory/raw.json",
+    "https://github.com/openhistorymap/openwinemap/tree/af92e371f323894b7e9a3db2449146fa65a4df9b/data/countries",
+    "https://github.com/open-innovations/west-yorkshire-mapping-old/tree/08a7c2b3e33643d307bba6c6bc36956b4e3db85c/data"
+  ],
+  "discovery_mode": "source_first_no_search",
+  "ranking_applied": false,
+  "contact_quota_applied": false,
+  "automatic_outreach": false,
+  "snapshot_sha256": "1d197d2f4f69f11449f3798dc6945c9fc0517174895b8b49405fad2254d6336a"
+}

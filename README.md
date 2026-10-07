@@ -1,4 +1,37 @@
-# 🐋 Whale Tracker TG Bot
+# Prospect OS — Buyer-Intent Lead Qualification
+
+Evidence-first prospecting for small Web3/software B2B companies and lawful independent
+retail businesses. Prioritize existing RAW by industry, channel and country gaps,
+verify human chat reachability and repair missing qualification evidence.
+
+The formal cohort is **30 companies: Track A/B 15/15, 24 WhatsApp + 6 Telegram**,
+selected from at least 42 distinct eligible reserves. Chat links, human access and
+decision-maker access are verified separately. Budgeted, resumable screening and
+per-run/source conversion reports keep acquisition costs and progress visible.
+
+Start with the [Prospect OS workflow](prospect-os-workflow1/README.md) and its
+[current operating policy](prospect-os-workflow1/system/buyer-intent-sprint.md).
+
+The original wallet-monitor bot remains a subsystem under this repository. It
+is no longer the repository's overall product name.
+
+## Prospect OS integration layer
+
+The isolated `prospect-os-workflow1` module combines:
+
+- off-search discovery and small-business/no-chain gates;
+- Agent-Reach public activity evidence;
+- Chatwoot conversation and first-response evidence;
+- Mautic/PostHog owned-site and campaign events;
+- n8n event transport;
+- wallet-monitor payment confirmation.
+
+The integration layer is read-only with respect to prospects. It does not send
+WhatsApp/Telegram messages, use unofficial WhatsApp sessions, or treat a
+contact button, crypto signal, page view, or public comment as proof of a direct
+reply or payment. See [`prospect-os-workflow1/system/intent-validation.md`](prospect-os-workflow1/system/intent-validation.md).
+
+## Wallet monitor subsystem
 
 实时监控链上鲸鱼钱包动向的 Telegram Bot。支持 Ethereum、BSC、Tron 三链，USDT 收款，并内置「聪明钱 Alpha 信号」与每日日报。
 
@@ -83,7 +116,7 @@ python bot.py
 ## 项目结构
 
 ```
-wallet-monitor-bot/
+localbiz-prospect-os/
 ├── bot.py          # TG Bot 主程序（命令 + 按钮 + 后台循环）
 ├── config.py       # 配置（自动加载 .env）
 ├── models.py       # SQLite 数据库模型
