@@ -1,4 +1,7 @@
-# 部署指南 · Whale Tracker TG Bot
+# 部署指南 · Prospect OS
+
+本仓库同时保留原有 Whale Tracker TG Bot 钱包监控子系统。以下部署步骤针对该
+Telegram 钱包监控 worker；获客验证层本身是离线/只读 CLI，不需要 7x24 运行。
 
 本 Bot 采用 **long-polling（长轮询）** 方式运行，不需要公网端口/域名，
 因此最适合以 **后台 worker** 形式部署到云平台（Railway / Render / Fly.io / 任意 VPS）。

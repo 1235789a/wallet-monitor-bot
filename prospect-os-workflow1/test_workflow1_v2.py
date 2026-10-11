@@ -146,7 +146,7 @@ def demo_candidate(index: int) -> dict:
         "social_profiles": {"facebook": f"https://facebook.com/safe-demo-{index:02d}"},
         "research_evidence": evidence,
         "score_breakdown": scores,
-        "first_message": "Hi, I’m [Your Name]. I help Web3 teams make product explanations easier to follow. Your fintech launches include search retainers. Do clients also ask about product clarity?",
+        "first_message": "Hi, I’m [Your Name]. I work on how buyers find fintech software teams. I saw your fintech product work. Want me to check one search buyers use to find a fintech studio?",
     }
     if telegram:
         item["telegram_quality_score"] = 92
