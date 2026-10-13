@@ -86,6 +86,17 @@ class ContactPoolTests(unittest.TestCase):
             {'channel': 'telegram', 'value': 'https://telegram.me/share/url?url=https://business.example',
              'route_type': 'group_or_channel', 'evidence': email['evidence']}]})[0], 'review')
 
+    def test_whatsapp_local_numbers_are_not_valid_international_routes(self):
+        basic = {'contact_enrichment_status': 'completed',
+                 'website_url': 'https://business.example'}
+        for value in ('https://wa.me/07568488799',
+                      'https://api.whatsapp.com/send?phone=00306981050681'):
+            route = {'channel': 'whatsapp', 'value': value,
+                     'evidence': {'source_url': 'https://business.example/contact'}}
+            self.assertEqual(classify_pool({**basic, 'contacts': [route]})[0], 'review')
+        route['value'] = 'https://wa.me/447568488799'
+        self.assertEqual(classify_pool({**basic, 'contacts': [route]})[0], 'chat')
+
     def test_raw_pool_screened_before_lock_and_email_kept_separate(self):
         labels = {WEB3: 'blockchain', AI_B2B: 'software', VAPE_TOBACCO: 'vape',
                   ALCOHOL_BAR: 'wine', ADULT_RETAIL: 'adult retail shop'}

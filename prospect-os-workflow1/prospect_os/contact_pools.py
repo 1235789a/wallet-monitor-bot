@@ -81,7 +81,8 @@ def _usable_contact(contact, channel, website):
             digits = (parse_qs(parsed.query).get('phone') or [''])[0]
             if not re.fullmatch(r'\+?\d{7,15}', digits):
                 return False
-        return 7 <= len(digits) <= 15 and (host == 'wa.me' or parsed.path.strip('/') == 'send')
+        return (7 <= len(digits) <= 15 and not digits.startswith('0')
+                and (host == 'wa.me' or parsed.path.strip('/') == 'send'))
     if channel == 'telegram':
         path = urlsplit(url).path.casefold().strip('/')
         return (host in {'t.me', 'telegram.me'}
