@@ -107,6 +107,19 @@ class SourceSchedulingTests(unittest.TestCase):
                 self.assertTrue(row["selected_contact_value"].startswith("https://t.me/"))
 
 
+class MixedSourceLocationTests(unittest.TestCase):
+    def test_directory_tags_do_not_crash_or_become_location_proof(self):
+        rows = [
+            {"website_url": "https://shop.example", "raw_source_record": {"tags": ["SaaS", "AI"]}},
+            {"website_url": "https://shop.example", "raw_source_record": {"type": "Feature", "properties": {"tags": {"address": "Store A"}}}},
+            {"website_url": "https://shop.example", "raw_source_record": {"tags": {"addr:full": "Store B"}}},
+            {"website_url": "https://other.example", "raw_source_record": ["malformed"]},
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            repairer = ReviewRepairer(temp, raw_rows=rows)
+        self.assertEqual(repairer.domain_locations, {"shop.example": {"Store A", "Store B"}})
+
+
 class HumanReachabilityTests(unittest.TestCase):
     def test_generic_whatsapp_and_automated_welcome_stay_review(self):
         for anchor, state in (("WhatsApp", "unknown"), ("Automated welcome", "automated_welcome")):

@@ -46,7 +46,13 @@ class ReviewRepairer:
         for row in raw_rows:
             domain = canonical_domain(str(row.get("website_url") or row.get("domain") or ""))
             raw = row.get("raw_source_record") or {}
-            tags = (raw.get("tags") or raw) if isinstance(raw, dict) else {}
+            properties = raw.get("properties") if isinstance(raw, dict) else None
+            record = properties if isinstance(properties, dict) else raw
+            tags = (record.get("tags") or record) if isinstance(record, dict) else {}
+            # Directory category labels may be a list; they are not OSM
+            # address mappings and cannot establish a physical location.
+            if not isinstance(tags, dict):
+                tags = {}
             # Source point IDs establish a lower bound, never a complete count.
             location = row.get("location_id") or tags.get("addr:full") or tags.get("address")
             if domain and location:
