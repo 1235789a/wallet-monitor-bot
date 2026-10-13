@@ -33,6 +33,29 @@ def company(index, vertical=WEB3, channel="whatsapp", country="Brazil", source="
 
 
 class SourceSchedulingTests(unittest.TestCase):
+    def test_aggregate_stop_preserves_bounded_unseen_segment_exploration(self):
+        poor = company(1, country="PT", source="directory")
+        unseen = [company(100 + i, country="BR", source="directory") for i in range(10)]
+        metrics = {"directory": {
+            "source_stop_reason": "zero_prelock_pass_after_50_raw",
+            "by_segment": {segment_key(poor): {
+                "screened_count": 50, "source_stop_reason": "zero_prelock_pass_after_50_raw"}}}}
+        selected = schedule_raw([poor] + unseen, compute_required_slots([]), metrics,
+                                batch_size=10, seed=1, stopped_sources=["directory"])
+        self.assertEqual(len(selected), 5)
+        self.assertEqual({row["country"] for row in selected}, {"BR"})
+        metrics["directory"]["by_segment"][segment_key(unseen[0])] = {"screened_count": 29}
+        selected = schedule_raw(unseen, compute_required_slots([]), metrics,
+                                batch_size=10, seed=1, stopped_sources=["directory"])
+        self.assertEqual(len(selected), 1)
+
+    def test_explicit_discovery_stop_cannot_be_reopened_by_new_segment(self):
+        row = company(1, country="BR", source="directory")
+        metrics = {"directory": {"source_stop_reason": "source_returned_empty_batch",
+                                  "by_segment": {"web3_blockchain|PT": {"screened_count": 50}}}}
+        self.assertEqual(schedule_raw([row], compute_required_slots([]), metrics,
+                         batch_size=10, seed=1, stopped_sources=["directory"]), [])
+
     def test_vertical_gap_beats_easy_cached_surplus(self):
         passed = [dict(company(i, AI_B2B), prelock_status="PRELOCK_PASS", buyer_grade="B",
                        available_contact_channels=["whatsapp"]) for i in range(20)]

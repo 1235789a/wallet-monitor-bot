@@ -116,6 +116,10 @@ missing channel's observed human-route yield within each source/vertical/country
 segment, country/source diversity and cached evidence. Surplus from one vertical
 cannot fill another vertical's quota; dual-route companies count once. Country
 diversity is a scheduling preference, not a new formal country quota.
+An aggregate low-yield stop does not exhaust untested vertical/country segments:
+they receive at most five exploratory records per batch, up to the 30-record
+minimum screening window. Stopped tested segments and explicit empty/duplicate
+source stops remain excluded.
 
 ```bash
 python expand_buyer_sprint.py --source runs/discovery/raw.json \

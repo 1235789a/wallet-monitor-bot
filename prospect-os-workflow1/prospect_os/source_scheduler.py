@@ -12,6 +12,14 @@ from .source_pool import canonical_domain
 from .contact_pools import _usable_contact
 from .contact_reachability import route_summary
 
+PERFORMANCE_STOP_REASONS = {
+    "no_valid_chat_route_in_minimum_screen_window",
+    "website_resolution_rate_below_15_percent_after_50_raw",
+    "zero_prelock_pass_after_50_raw",
+    "stale_or_closed_records_exceed_half_of_screened_rows",
+    "chain_or_non_icp_records_exceed_half_of_screened_rows",
+}
+
 
 def source_key(row):
     if row.get("expansion_source_key"):
@@ -64,20 +72,38 @@ def schedule_raw(rows, slots, yields, *, batch_size, seed, processed=(), cached_
     country_history = Counter(country_key(row) for row in processed)
     stopped = set(stopped_sources)
     candidates = []
+    exploration_caps = {}
     seen_raw = set()
     for row in sorted(rows, key=lambda row: (
             0 if sampling_record_key(row) in cached_keys else 1,
             0 if row.get("website_url") else 1, sampling_record_key(row))):
         vertical, source = classify_vertical(row), source_key(row)
         aliases = identity_aliases(row)
-        if (vertical == SECONDARY or source in stopped or aliases & (seen_aliases | seen_raw)
+        if (vertical == SECONDARY or aliases & (seen_aliases | seen_raw)
                 or row.get("do_not_contact") is True or row.get("chain") is True):
             continue
-        seen_raw.update(aliases)
-        metrics = (yields.get(source, {}).get("by_segment", {}).get(segment_key(row))
-                   or yields.get(source, {}).get("by_vertical", {}).get(vertical) or {})
-        if metrics.get("source_stop_reason"):
+        source_metrics = yields.get(source, {})
+        segments = source_metrics.get("by_segment", {})
+        segment = segment_key(row)
+        segment_metrics = segments.get(segment, {})
+        if source in stopped:
+            # Aggregate performance cannot establish that an untested country
+            # or vertical is exhausted. Explicit discovery stops still apply
+            # to the whole source; poor tested segments remain stopped.
+            if (source_metrics.get("source_stop_reason") not in PERFORMANCE_STOP_REASONS
+                    or not segments):
+                continue
+            screened = int(segment_metrics.get("screened_count", segment_metrics.get("fresh_raw", 0)))
+            if screened < 30:
+                exploration_caps[(source, segment)] = min(5, 30 - screened)
+        metrics = segment_metrics or source_metrics.get("by_vertical", {}).get(vertical) or {}
+        if segment_metrics.get("source_stop_reason"):
             continue
+        # A vertical aggregate is a rate prior, not evidence that a new
+        # country segment has already been screened and should be stopped.
+        if not segments and metrics.get("source_stop_reason"):
+            continue
+        seen_raw.update(aliases)
         short = int(slots.get("vertical_shortfall", {}).get(vertical, 0))
         channel_gaps = slots.get("channel_shortfall", {})
         channel_value = 0.0
@@ -110,7 +136,7 @@ def schedule_raw(rows, slots, yields, *, batch_size, seed, processed=(), cached_
         score = demand * (0.5 + quality) * cost * (1.5 if cached else 1)
         tie = hashlib.sha256(f"{seed}|{sampling_record_key(row)}".encode()).hexdigest()
         candidates.append((score, tie, row, target_channel))
-    selected, countries, sources, verticals = [], Counter(), Counter(), Counter()
+    selected, countries, sources, verticals, segment_counts = [], Counter(), Counter(), Counter(), Counter()
     batch_aliases = set()
     caps = {"country": max(1, math.ceil(batch_size * country_share)),
             "source": max(1, math.ceil(batch_size * source_share))}
@@ -119,6 +145,8 @@ def schedule_raw(rows, slots, yields, *, batch_size, seed, processed=(), cached_
         distinct_sources = {source_key(item[2]) for item in candidates}
         allowed = [item for item in candidates
                    if not identity_aliases(item[2]) & batch_aliases
+                   and segment_counts[(source_key(item[2]), segment_key(item[2]))]
+                       < exploration_caps.get((source_key(item[2]), segment_key(item[2])), batch_size)
                    and (len(distinct_countries) <= 1 or countries[country_key(item[2])] < caps["country"])
                    and (len(distinct_sources) <= 1 or sources[source_key(item[2])] < caps["source"])]
         if not allowed:
@@ -140,6 +168,7 @@ def schedule_raw(rows, slots, yields, *, batch_size, seed, processed=(), cached_
         countries[country] += 1
         sources[source] += 1
         verticals[classify_vertical(row)] += 1
+        segment_counts[(source, segment_key(row))] += 1
         batch_aliases.update(identity_aliases(row))
         candidates.remove(best)
     return selected
