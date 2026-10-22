@@ -4,7 +4,8 @@ from first_principles_pilot import route, pilot_report
 
 def row(name, channel, stage="READY_FOR_MANUAL_OUTREACH"):
     domain=name.lower().replace(" ", "")+".example"
-    link=("https://wa.me/919999999999" if channel=="whatsapp" else "https://t.me/human_biz_dev")
+    unique=sum((i+1)*ord(c) for i,c in enumerate(name))%10_000_000
+    link=(f"https://wa.me/91999{unique:07d}" if channel=="whatsapp" else "https://t.me/human_"+name.lower())
     return {"company":name,"website":"https://"+domain,
             "source":{"url":"https://clutch.co/company/"+name.lower()},
             "contact":{"official_page":"https://"+domain+"/contact"},
@@ -25,6 +26,13 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(result['ready_count'],{'whatsapp':10,'telegram':2})
         self.assertEqual(result['gaps'],{'whatsapp':0,'telegram':0})
         self.assertEqual(len(result['ready']),12)
+    def test_two_brands_shared_whatsapp_are_not_two_leads(self):
+        a=row('One','whatsapp')
+        b=row('Two','whatsapp')
+        b['chat_url']=a['chat_url']
+        result=pilot_report({'rows':[a,b]})
+        self.assertEqual(result['ready_count']['whatsapp'], 1)
+        self.assertIn('DUPLICATE_OR_MISSING_ID',[x['state'] for x in result['review']])
     def test_unknown_buyer_stays_hold(self):
         data=pilot_report({'rows':[row('Example','whatsapp',stage='HOLD')]})
         self.assertEqual(data['gaps']['whatsapp'],10)
