@@ -9,7 +9,7 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 TARGETS = {"whatsapp": 10, "telegram": 2}
 
@@ -24,8 +24,10 @@ def route(url):
     if host == "wa.me" and (re.fullmatch(r"[1-9][0-9]{7,14}", path)
                             or re.fullmatch(r"message/[A-Za-z0-9]+", path)):
         return "whatsapp"
-    if host == "api.whatsapp.com" and p.path.rstrip("/") == "/send" and "phone=" in p.query:
-        return "whatsapp"
+    if host == "api.whatsapp.com" and p.path.rstrip("/") == "/send":
+        phone = parse_qs(p.query).get("phone", [""])[0]
+        if re.fullmatch(r"[1-9][0-9]{7,14}", phone):
+            return "whatsapp"
     if host in {"t.me", "telegram.me"} and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", path):
         if not path.lower().endswith("bot"):
             return "telegram"
@@ -54,11 +56,23 @@ def pilot_report(audited):
         # Caller must provide the exact official page where the link was seen.
         official_page = (row.get("contact") or {}).get("official_page", "")
         link_ok = bool(host(official_page) and host(official_page) == host(official) and channel)
-        key = host(official) or company.casefold()
-        if not key or key in seen:
+        # Deduplicate by website, normalized name AND stable public chat identity.
+        # Opaque WhatsApp message links may lack a phone: keep other keys.
+        chat = urlsplit(str(row.get("chat_url") or ""))
+        chatpath = chat.path.strip("/").lstrip("+")
+        keys = {("domain", host(official)), ("name", company.casefold())}
+        if channel == "whatsapp":
+            number = chatpath if re.fullmatch(r"[1-9][0-9]{7,14}", chatpath) else parse_qs(chat.query).get("phone", [""])[0]
+            if re.fullmatch(r"[1-9][0-9]{7,14}", number):
+                keys.add(("whatsapp", number))
+        if channel == "telegram":
+            keys.add(("telegram", chatpath.casefold()))
+        keys.discard(("domain", ""))
+        keys.discard(("name", ""))
+        if not keys or seen.intersection(keys):
             review.append({"company": company, "state": "DUPLICATE_OR_MISSING_ID"})
             continue
-        seen.add(key)
+        seen.update(keys)
         if not origin_ok or not link_ok:
             review.append({"company": company, "state": "SOURCE_OR_ROUTE_HOLD"})
             continue
