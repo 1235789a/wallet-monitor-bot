@@ -8,6 +8,7 @@ import argparse
 import json
 import re
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
@@ -38,12 +39,38 @@ def host(url):
     return (urlsplit(str(url or "")).hostname or "").lower().removeprefix("www.")
 
 
+def outbound_history_verified(proof, batch_started_at):
+    """Fail closed until external sent/replied history is actually reconciled.
+
+    This validates *attestation completeness*, not the contents of messaging
+    exports. A human must review the referenced private records. No tokens,
+    messages, customer phone logs, or chat exports belong in this repository.
+    """
+    if not isinstance(proof, dict) or proof.get("review_status") != "PASS":
+        return False
+    channels = proof.get("channels") or {}
+    if not all((channels.get(c) or {}).get("reviewed") is True
+               and (channels.get(c) or {}).get("source_id")
+               for c in ("whatsapp", "telegram")):
+        return False
+    if not proof.get("reviewer") or not proof.get("private_evidence_ref"):
+        return False
+    try:
+        cutoff = datetime.fromisoformat(str(proof["covers_sent_through"]).replace("Z", "+00:00"))
+        started = datetime.fromisoformat(str(batch_started_at).replace("Z", "+00:00"))
+        return bool(cutoff.tzinfo and started.tzinfo and cutoff >= started)
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
 def pilot_report(audited):
     """v2.1 auditor's READY is authoritative; route candidates are not READY."""
     counted = Counter()
     chosen = []
     review = []
     seen = set()
+    history_verified = outbound_history_verified(audited.get("outbound_history_proof"),
+                                                   audited.get("batch_started_at"))
     for row in audited.get("rows", []):
         channel = route(row.get("chat_url"))
         company = (row.get("company") or "").strip()
@@ -77,6 +104,11 @@ def pilot_report(audited):
             review.append({"company": company, "state": "SOURCE_OR_ROUTE_HOLD"})
             continue
         stage = row.get("stage", "UNKNOWN")
+        if not history_verified:
+            review.append({"company": company, "channel": channel,
+                           "state": "OUTBOUND_HISTORY_UNVERIFIED",
+                           "reasons": ["Current WhatsApp AND Telegram sent-history exports have not been reconciled"]})
+            continue
         if stage != "READY_FOR_MANUAL_OUTREACH":
             reason = row.get("gate_reasons", [])
             review.append({"company": company, "channel": channel, "link": row.get("chat_url"),
@@ -104,7 +136,10 @@ def main():
     if source == destination or destination.exists():
         raise SystemExit("Refusing to replace inputs or an existing run")
     from prospect_os.growth_engine_v21 import audit_run
-    audited = audit_run(json.loads(source.read_text(encoding="utf-8")))
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    audited = audit_run(payload)
+    audited["outbound_history_proof"] = payload.get("outbound_history_proof")
+    audited["batch_started_at"] = payload.get("batch_started_at")
     result = pilot_report(audited)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
