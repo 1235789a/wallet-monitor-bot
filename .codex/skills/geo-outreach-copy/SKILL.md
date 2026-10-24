@@ -5,6 +5,13 @@ description: Generate and review short evidence-grounded first-contact WhatsApp 
 
 # geo-outreach-copy
 
+For the user's 精做 workflow and automatic delivered-list deduplication, read
+`references/precision-evidence.md`. This is the explicit user extension recorded
+2026-10-24: produce real evidence images and their matching captions, research
+the industry's actual buying criteria in depth, and persist every delivery as
+provided history even if the next user message changes topic. Refinements keep
+the original company IDs and never inflate new-client counts.
+
 Use for first-contact WhatsApp/Telegram drafts only. Prospect OS stays at research → draft → human review; never send messages.
 
 1. Read prospect-os-workflow1/system/outreach-message-policy.md and references/message-rules.md in this Skill.
