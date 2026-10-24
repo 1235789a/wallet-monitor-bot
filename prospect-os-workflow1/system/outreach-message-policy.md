@@ -4,7 +4,7 @@
 
 ## 写作前
 
-只读取 prospect record 已有的官网、买家查询、竞品/可见性、决策人、活跃度和 PRELOCK 证据；不在写话术时重新研究，也不补猜测。每个可核验陈述都要能回指 evidence id、来源 URL 与证据状态。
+写话术时只读取已完成的 prospect record、INDUSTRY_DOSSIER、CLIENT_CONTEXT 以及证据ID，不在写作阶段临时编造或添加事实。**在写话术之前**，研究阶段必须先查行业买家采购逻辑、目标公司网页与竞品/替代方案，并做反证核查；不足时标 INDUSTRY_RESEARCH_PENDING，不允许生成假个性化稿。每个可核验陈述都要能回指 evidence id、来源 URL 与证据状态。
 
 - 先检查当前所选联系入口的 `outreach_route`，不要用另一条入口的证据。客服、售后、订单、预订和演示机器人入口不生成开发推荐话术。只知道有 WA、自动欢迎、产品销售客服或真人归属未知时，`message_intent=recipient_check`：透明说明服务身份，只问是否能联系负责营销/获客的人，不同时推销搜索检查。官网商务/负责人入口与真人可达证据齐全后才用 `message_intent=buyer_search`。销售号码本身不等于决策人号码。
 - PRELOCK_REVIEW：在确认商务接收人后，只请求许可去测试一个真实买家搜索；未确认时先做上述接收人确认。不能说已发现竞品差距、已检查可见度、客户正在流失或已有 GEO 问题。未测试的查询、竞品与 visibility gap 必须留空。
@@ -33,3 +33,12 @@
 输出 outreach.language、channel、message_mode、recommended_first_message、cta、personalization_fact、buyer_query_used、visibility_evidence_used、message_candidates 与 message_quality。REVIEW 时 buyer_query_used 必须为 null，visibility_evidence_used 必须为 false。
 
 WhatsApp 仅认明确的 WhatsApp 直聊链接；电话不能升级为 WA。Telegram 必须是经核验的真人/企业账号直聊页，群、频道、bot、邀请和分享页均不能作为直聊入口。联系路由不合格时不生成可发送话术。
+
+
+## v2.0 新增｜行业痛点与案例式首联（2026-10-24）
+- 首联前必须执行 `.codex/skills/geo-outreach-copy/references/industry-research-gate.md`，形成行业买家、采购触发、决策条件、竞品/替代方案、客户具体事实及反证记录。行业泛泛介绍、企业产品功能复述、没有采购理由的“缺少SEO内容”均不能叫案例或真实痛点。
+- `WEBSITE_PRE_DIAGNOSIS` 只允许陈述真实企业页面可验证的事实与采购困惑假设；网页观察≠AI推荐实测≠流失客户。比较价格时必须先对齐套餐/币种/计费周期/税费/地域，不得为了“冲击力”造矛盾。
+- 对已核验的对应商务决策入口，可写简短 case-led 首联：具体观察 + 买家会关心的关键区别 + 有界修复方向 + 一问句。身份介绍要清晰。未核验收件人依然优先 recipient_check，客服/机器人HOLD，绝不因“有图有案例”跳过。
+- 用户要求“带图片的案例”时，执行 `.codex/skills/geo-outreach-copy/references/case-evidence-rules.md`。仅用可追溯的原始截图/真实模型回答；无截屏/时间/链接不得生成伪真图或称有实测。客户隐私素材不向新客户提供，未经公开许可不得声称合作案例。
+- 行业受限/年龄限制品类默认研究隔离，不直接生成促销首联；另有专门合法审批条件才评估。历史客户去重、拒绝、送达证据和权限记录优先于任何销售文案。
+- 输出额外携带 industry_research_status、pain_mechanism、insight_grade、counterevidence、evidence_artifact_level、evidence_image_provenance、smallest_fix，并保留原有 message_quality 与 PRELOCK/EVIDENCE 状态。
