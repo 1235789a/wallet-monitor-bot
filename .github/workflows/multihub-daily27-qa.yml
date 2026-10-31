@@ -1,0 +1,20 @@
+name: MultiHub Daily 27 QA
+on:
+  pull_request:
+    paths:
+      - "scripts/validate_daily_evidence.py"
+      - "scripts/test_validate_daily_evidence.py"
+      - ".github/workflows/multihub-daily27-qa.yml"
+  workflow_dispatch:
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test current daily 27 validator
+        run: python -m unittest discover -s scripts -p "test_validate_daily_evidence.py" -v
