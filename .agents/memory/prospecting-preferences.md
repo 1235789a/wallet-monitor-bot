@@ -30,3 +30,8 @@ and central ledger `1gMiJr8TODAvJxweoXb7Y6hoJPTvP7NVX0BUo-knnwmk`, tab `History`
 or reply event. Preserve source-specific status conflicts rather than treating
 imported bulk labels as observed replies. The WA/TG tracker count is not a
 cross-channel unique-company count.
+
+
+## Active MultiHub daily lead standard — 2026-10-31
+
+Use `prospect-os-workflow1/system/daily-27-policy.md` (based on the user's 2026-10-29 Drive evidence-image SOP) for the current 15 WA + 2 TG + 10 FB allocation, including three regulated retail **research-only** experiment slots within WA. Keep separate ICP_PASS / ASSET_READY / SEND_READY stages, current Drive-wide automatic presented-client deduplication and the saved revised natural-language first-contact style. Old 10+2 / 12+2 / 12+3 / 24+6 quotas are historical only. Preserve existing safeguards for evidence, legal contact, human recipient and no automatic sending.
