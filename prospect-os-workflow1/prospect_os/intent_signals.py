@@ -7,7 +7,7 @@ The external projects used with this module are collectors, not truth machines:
   connected;
 * Mautic and PostHog supply owned-site/email behaviour;
 * n8n transports events between systems;
-* the existing wallet monitor supplies actual payment evidence.
+* confirmed external payment evidence (not a crypto market signal) establishes a paid conversion.
 
 This module never sends a message, infers a reply from a contact button, or
 turns a crypto signal into payment intent.  Scores are ranking aids.  Ground
