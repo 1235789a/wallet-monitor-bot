@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from .daily27_models import CandidateRecord
-from .website_resolution import extract_domain
+from .daily27_url_helpers import extract_domain
 
 REQUIRED_HISTORY_KEYS = (
     "103_MASTER",
