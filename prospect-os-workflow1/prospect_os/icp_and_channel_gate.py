@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .cross_channel_dedupe import normalize_fb_handle, normalize_tg_handle, normalize_wa_phone
 from .daily27_models import CandidateRecord
-from .website_resolution import extract_domain, is_search_engine
+from .daily27_url_helpers import extract_domain, is_search_engine
 
 # Known GEO / SEO / AI Search Visibility / Marketing Agency peers to separate as PARTNER_CANDIDATE
 KNOWN_GEO_SEO_PARTNER_DOMAINS = {
