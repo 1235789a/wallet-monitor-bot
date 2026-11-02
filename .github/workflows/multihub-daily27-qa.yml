@@ -5,6 +5,10 @@ on:
       - "scripts/validate_daily_evidence.py"
       - "scripts/test_validate_daily_evidence.py"
       - ".github/workflows/multihub-daily27-qa.yml"
+      - "prospect-os-workflow1/prospect_os/**"
+      - "scripts/run_daily27_pipeline.py"
+      - "scripts/validate_daily27_production.py"
+      - "scripts/test_daily27_runtime.py"
   workflow_dispatch:
 jobs:
   unit-tests:
@@ -16,5 +20,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Test current daily 27 validator
+      - name: Install production PNG dependency
+        run: python -m pip install Pillow
+      - name: Test legacy validator (preserved)
         run: python -m unittest discover -s scripts -p "test_validate_daily_evidence.py" -v
+      - name: Test new Daily27 pipeline
+        run: python scripts/test_daily27_runtime.py

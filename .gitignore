@@ -1,4 +1,4 @@
-﻿_push.py
+_push.py
 push_to_github.py
 _test_tron.py
 last_state.json
@@ -11,5 +11,6 @@ _check_run.py
 *.log
 *.err
 *.zip
-
-
+outputs/
+*.pyc
+.pytest_cache/
