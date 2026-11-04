@@ -29,3 +29,9 @@ All rows are joined by **original_prospect_id**, never row number, company nickn
 
 ## Historical record
 Each deliverable marks `presented_at` once per canonical ID. Presented is not contacted, replied, opted out, or sold. Old delivered batches cannot be passed off as newly discovered.
+
+## Chat delivery manifest extension (2026-11-05)
+
+Keep the existing `pairs.json` contract. Separately emit `chat_delivery.json` as an array, one row per original ID, with:
+`original_prospect_id`, `company`, `channel`, `route_url`, `image_drive_url`, `inline_image_ref`, `inline_image_render_verified` (boolean), `route_click_verified` (boolean), `message`, `chat_block_emitted` (boolean), `chat_delivery_status` (`CHAT_DELIVERED` or `CHAT_DELIVERY_UNVERIFIED`), `hold_reasons` (array), `send_ready` (boolean).
+The `inline_image_ref` is the actual image source used in the chat, not a local filename or a ZIP/PDF viewer. Set verification booleans true ONLY after an actual applicable check; absent capability => false. Delivery status is not an outreach permission status.
