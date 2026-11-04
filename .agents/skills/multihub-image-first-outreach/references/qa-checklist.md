@@ -19,3 +19,14 @@ Score grounding 25, specificity 15, naturalness 15, compression 10, single CTA 1
 
 ### Current Taksh batch exception example
 On 2026-10-27, 13 mobile PNGs and associated messages were created from public text: `TEXT_EVIDENCE_CARD`. Original screenshot archiving and marketing recipient confirmation are not complete. They are shareable *draft assets*, not `SEND_READY`. Maticz Technologies was excluded as an old historical match; preserve the exclusion.
+
+## Final chat acceptance gate (2026-11-05)
+
+- [ ] All scoped original IDs are present exactly once, in requested WA/FB/TG grouping.
+- [ ] Every company has its own *visible inline* image; image identity and original-ID mapping are confirmed. A Drive file viewer, ZIP, PDF, local path or bare URL is not an inline image.
+- [ ] Every company has an adjacent clickable channel-specific contact link; WA links must be WhatsApp chat URLs, TG a person/business, FB Page must not masquerade as personal Messenger.
+- [ ] Every block has copyable company-specific copy, actual source URLs, evidence grade and HOLD/READY rationale.
+- [ ] Real AI recommendation tests are distinguished from source-backed illustration; original screenshots are not inferred.
+- [ ] No SEND_READY without separate outreach QA; no sending or reply fabrication.
+- [ ] Mobile display and link opening are claimed verified only when actually tested. Otherwise explicitly report unverified.
+- [ ] Archive-only delivery is an automatic CHAT_DELIVERY_UNVERIFIED, regardless of asset count.

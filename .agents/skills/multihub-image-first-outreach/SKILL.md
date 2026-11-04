@@ -85,3 +85,20 @@ Conclude with audited totals: companies in scope, dedupe exclusions, image-pairs
 ## Active MultiHub daily lead standard — 2026-10-31
 
 Use `prospect-os-workflow1/system/daily-27-policy.md` (based on the user's 2026-10-29 Drive evidence-image SOP) for the current 15 WA + 2 TG + 10 FB allocation, including three regulated retail **research-only** experiment slots within WA. Keep separate ICP_PASS / ASSET_READY / SEND_READY stages, current Drive-wide automatic presented-client deduplication and the saved revised natural-language first-contact style. Old 10+2 / 12+2 / 12+3 / 24+6 quotas are historical only. Preserve existing safeguards for evidence, legal contact, human recipient and no automatic sending.
+
+## Mandatory chat-native delivery gate (2026-11-05)
+
+When the user requests "整理Skill", "发给我", "按整理Skill交付", or a prospect batch, the **primary deliverable is the chat message itself**. PDF, ZIP, Markdown, CSV and Drive are supplementary archives, NEVER substitutes. Do not claim complete delivery when only an archive was uploaded.
+
+For each original ID in order, render ONE complete company block in the chat:
+1. Company name, immutable original ID, channel, source-grounded specific fact, checked date and evidence grade.
+2. **The actual company-specific evidence image displayed inline in the chat**, not merely a text link, filename, sandbox URL, or a link to a ZIP/PDF. Use a supported image display component with a verified reachable image asset; never put a sandbox path into an HTTPS link component or assume a Drive viewer URL is a directly renderable image. If inline display cannot be achieved, say IMAGE_INLINE_UNVERIFIED and do not claim CHAT_DELIVERED.
+3. Clickable channel deep link immediately adjacent to the image (official wa.me / api.whatsapp.com for WA, exact verified t.me person for TG, verified individual Messenger link for FB; a Facebook Page is labelled PAGE_ONLY and cannot be presented as a personal DM).
+4. Plain, copyable, company-specific 25–45 word message (<=60), truthful about whether the image is actually attached to a future outgoing message. Do not state it was attached merely because it is displayed in ChatGPT.
+5. Sources, contact/consent, historical dedupe and evidence/AI-test status, HOLD reason or SEND_READY (independent of chat presentation).
+
+**Preflight and final acceptance:** lock expected IDs and counts; verify image identity + full SHA256; verify link shape and read-back source; check actual inline rendering and clickability in the target client when technically possible. A syntactically valid URL is NOT proof the user can open it. If client-side visual/click verification is unavailable, report that limitation explicitly; do not assert tested mobile rendering. Never invent a direct image URL or fake a screenshot. If a company lacks a renderable image, show its truthful missing-image state in the same company block, count it as incomplete, and continue with the others.
+
+Stage separation: RESEARCH_READY -> ASSET_READY -> CHAT_DELIVERED only after the complete in-chat block is emitted and display is verifiable; otherwise CHAT_DELIVERY_UNVERIFIED. SEND_READY is a separate outreach permission/evidence gate, never implied by CHAT_DELIVERED. User must not be asked to cross-reference image #N in one list with contact #N elsewhere. Preserve user-specified scope (e.g. WA12/FB10/TG1), not an unrelated daily quota.
+
+Run `scripts/validate_pairs.py` for asset pairing, and `scripts/validate_chat_delivery.py` for the delivery manifest. Both must pass their respective *machine-verifiable* checks. Human/client render checks are separate and must never be claimed by script alone. End with counts: expected, chat blocks emitted, images inline verified/unverified, clickable routes verified/unverified, HOLD, SEND_READY, and exact failures.
