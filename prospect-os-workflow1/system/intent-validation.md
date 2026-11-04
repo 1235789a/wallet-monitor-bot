@@ -11,7 +11,7 @@ read a stranger's mind.
 | Direct reply | Chatwoot on an official business channel, or a human-run test recorded in the OS | Delivered/read/replied/asked details/asked price |
 | Owned-site intent | Mautic or PostHog | Preview, pricing, form, demo, checkout and invoice events |
 | Transport | n8n | Webhooks and event routing only |
-| Payment ground truth | wallet-monitor-bot | Observed USDT arrival |
+| Payment ground truth | Verified manual settlement or authorized payment-provider event | Confirmed transaction with auditable source |
 
 ## Interpretation rules
 

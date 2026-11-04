@@ -40,7 +40,7 @@ class IntentSignalTests(unittest.TestCase):
 
     def test_payment_is_the_only_positive_ground_truth_for_purchase(self) -> None:
         weak = score_events([IntentEvent("pricing_page_view", "posthog")])
-        paid = score_events([IntentEvent("paid", "wallet_monitor")])
+        paid = score_events([IntentEvent("paid", "manual")])
         self.assertEqual(weak["purchase_ground_truth"], "not_observed")
         self.assertEqual(paid["purchase_ground_truth"], "observed_payment")
         self.assertEqual(paid["purchase_intent_score"], 100)
