@@ -1,3 +1,11 @@
+## Daily27 v4.0 additional hard QA gates (2026-11-07)
+
+Before giving a lead any high score or claiming it is ready, verify origin and immutable ID, exact company/domain/service match, staff/independent fit, history and opt-out coverage, dated commercial activity, actual channel and recipient/permission, and truthfulness of evidence type. A confirmed wrong sector or domain is REJECT_DOMAIN_MISMATCH, NOT a mere score penalty. Bot-blocked or missing records remain HOLD with the exact missing field. Public Facebook person search ≠ logged-in Messenger verified; Facebook company Page ≠ person; a WhatsApp business link ≠ confirmed marketing opt-in.
+
+A AI test needs the exact independent non-branded buyer question, verbatim actual model answer, platform/model/date/context, cited URLs, source screenshot and full hash; otherwise NOT_TESTED. B light research can create a truthful TEXT_DRAFT_READY with no image; TEXT_CONTACT_REVIEW_READY requires verified recipient, channel policy/permission and human check, and is not strict image-first SEND_READY. Strict ASSET_READY and SEND_READY retain the original capture, honest pairing, complete history and human-compliant contact requirements. Sent, replied, sample accepted, quote sent and paid require separate provenance.
+
+See prospect-os-workflow1/system/daily-27-v4.md.
+
 # MultiHub per-prospect QA rubric
 
 | Gate | PASS | HOLD |
