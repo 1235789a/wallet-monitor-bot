@@ -3,6 +3,11 @@ name: multihub-image-first-outreach
 description: MultiHub 一键整客配图首联 / first contact with one company-specific, fact-checked evidence image and one matching WhatsApp/Telegram/FB caption. Runs dedupe, research, evidence QA, image+message pairing, Drive writeback and delivery. Draft only, no auto-send.
 ---
 
+## Daily27 v4.0 scope clarification (2026-11-07)
+
+When invoked by the Daily27 research workflow, apply the Daily27 v4 SOP at prospect-os-workflow1/system/daily-27-v4.md first. Up to five A prospects get prioritized real AI model testing when available; up to nineteen B prospects can be text-first research drafts WITHOUT a PNG or AI test; three regulated WA slots stay research-only. Image-first Step 2/3 pairing below applies when a particular prospect actually enters image-first production or the user explicitly asks for a picture. Do not fabricate an image quota for every research row. TEXT_DRAFT_READY and TEXT_CONTACT_REVIEW_READY are separate from ASSET_READY and strict SEND_READY. Never convert a public site fact card into a purported ChatGPT answer, a search-indexed Facebook profile into a verified Messenger DM, or a public WhatsApp number into consent. Preserve the 2026-10-29 original-capture evidence requirements whenever actually claiming image-first SEND_READY. The independent Buyer-Intent Sprint 30-company flow is not changed.
+
+
 # MultiHub Image-First Outreach | 证据图 × 首联一一对应 v1.0
 
 ## Mission & triggers
