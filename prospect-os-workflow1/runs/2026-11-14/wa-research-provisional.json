@@ -6,9 +6,9 @@
   "drive_original": "https://docs.google.com/document/d/11LKFvUnM9DuqGfUecRmJeaiWWwJ7GF9y3BL-weMRMJA/edit",
   "daily_wa_research_target": 15,
   "existing_gemini_candidates": 5,
-  "additional_researched_companies": 6,
-  "researched_total": 11,
-  "research_target_shortfall": 4,
+  "additional_researched_companies": 10,
+  "researched_total": 15,
+  "research_target_shortfall": 0,
   "send_ready": 0,
   "actual_whatsapp_last_seen_verified": 0,
   "notes": [
@@ -17,7 +17,8 @@
     "A public WhatsApp link or number does not verify live last-seen time, marketing consent, ownership of recipient or legitimate SEND_READY.",
     "Historic deduplication across Drive master sheets was not completed. Until then no row may be promoted to ICP_PASS.",
     "All entries require last-seen screenshot showing TODAY HH:MM, with timezone, before manual cold-contact review. Hidden or unknown last seen remains excluded.",
-    "No AI buyer-result tests performed and no messages sent."
+    "No AI buyer-result tests performed and no messages sent.",
+    "15/15 means research records only, NOT fifteen eligible WhatsApp prospects. Three lack official WhatsApp proof; NovaX is HOLD_ICP. All have zero last-seen screenshots."
   ],
   "candidates": [
     {
@@ -308,6 +309,115 @@
         "HISTORY_INCOMPLETE",
         "PERMISSION_UNVERIFIED"
       ]
+    },
+    {
+      "channel": "WA",
+      "as_of": "2026-11-14",
+      "last_seen_local_hhmm": null,
+      "last_seen_screenshot_url": null,
+      "history_status": "HISTORY_INCOMPLETE",
+      "contact_permission": "UNVERIFIED",
+      "ai_test_status": "NOT_TESTED",
+      "message_sent": false,
+      "send_ready": false,
+      "stage": "WORK_RESEARCH_READY_PROVISIONAL",
+      "id": "WA-R-20261114-07",
+      "company": "Giallo Studio",
+      "website": "https://giallostudio.it",
+      "source": "GoodFirms directory",
+      "source_url": "https://www.goodfirms.co/company/giallo-studio",
+      "official_contact_evidence": "https://giallostudio.it/en/contatti",
+      "focus": "Italian SME AI agents and process automation",
+      "recent_activity_date": null,
+      "hold": [
+        "WA_LAST_SEEN_SCREENSHOT_MISSING",
+        "RECENT_ACTIVITY_UNVERIFIED",
+        "OVERSEAS_BUYER_FIT_UNVERIFIED",
+        "HISTORY_INCOMPLETE",
+        "PERMISSION_UNVERIFIED"
+      ]
+    },
+    {
+      "channel": "WA",
+      "as_of": "2026-11-14",
+      "last_seen_local_hhmm": null,
+      "last_seen_screenshot_url": null,
+      "history_status": "HISTORY_INCOMPLETE",
+      "contact_permission": "UNVERIFIED",
+      "ai_test_status": "NOT_TESTED",
+      "message_sent": false,
+      "send_ready": false,
+      "stage": "WORK_RESEARCH_READY_PROVISIONAL",
+      "id": "WA-R-20261114-08",
+      "company": "IntelliAgent",
+      "website": "https://intelliagent.pro",
+      "source": "GoodFirms directory",
+      "source_url": "https://www.goodfirms.co/company/intelliagent",
+      "official_contact_evidence": "https://intelliagent.pro/contact",
+      "focus": "Philippines worldwide remote AI agent agency",
+      "recent_activity_date": null,
+      "hold": [
+        "WA_LAST_SEEN_SCREENSHOT_MISSING",
+        "RECENT_ACTIVITY_UNVERIFIED",
+        "HISTORY_INCOMPLETE",
+        "PERMISSION_UNVERIFIED"
+      ]
+    },
+    {
+      "channel": "WA",
+      "as_of": "2026-11-14",
+      "last_seen_local_hhmm": null,
+      "last_seen_screenshot_url": null,
+      "history_status": "HISTORY_INCOMPLETE",
+      "contact_permission": "UNVERIFIED",
+      "ai_test_status": "NOT_TESTED",
+      "message_sent": false,
+      "send_ready": false,
+      "stage": "HOLD_ROUTE",
+      "id": "WA-R-20261114-09",
+      "company": "ProNova",
+      "website": "https://pronovahq.com",
+      "source": "GoodFirms directory",
+      "source_url": "https://www.goodfirms.co/company/pronova",
+      "official_contact_evidence": null,
+      "focus": "Berlin custom AI agents and MCP connectors",
+      "recent_activity_date": null,
+      "hold": [
+        "OFFICIAL_WHATSAPP_PROOF_MISSING",
+        "WA_LAST_SEEN_SCREENSHOT_MISSING",
+        "RECENT_ACTIVITY_UNVERIFIED",
+        "HISTORY_INCOMPLETE",
+        "PERMISSION_UNVERIFIED"
+      ]
+    },
+    {
+      "channel": "WA",
+      "as_of": "2026-11-14",
+      "last_seen_local_hhmm": null,
+      "last_seen_screenshot_url": null,
+      "history_status": "HISTORY_INCOMPLETE",
+      "contact_permission": "UNVERIFIED",
+      "ai_test_status": "NOT_TESTED",
+      "message_sent": false,
+      "send_ready": false,
+      "stage": "HOLD_ROUTE",
+      "id": "WA-R-20261114-10",
+      "company": "FiguredOutAI",
+      "website": "https://figuredoutai.com",
+      "source": "GoodFirms directory",
+      "source_url": "https://www.goodfirms.co/company/figuredoutai",
+      "official_contact_evidence": null,
+      "focus": "India AI agent engineering and white-label AI sales platform",
+      "recent_activity_date": null,
+      "hold": [
+        "OFFICIAL_WHATSAPP_PROOF_MISSING",
+        "WA_LAST_SEEN_SCREENSHOT_MISSING",
+        "RECENT_ACTIVITY_UNVERIFIED",
+        "HISTORY_INCOMPLETE",
+        "PERMISSION_UNVERIFIED"
+      ]
     }
-  ]
+  ],
+  "public_official_wa_route_evidence_found": 12,
+  "contact_route_proof_missing": 3
 }
