@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from prospect_os.cross_channel_dedupe import CrossChannelDedupeEngine
 from prospect_os.daily27_pipeline import Daily27Pipeline
+from prospect_os.fb_activity_gate import apply_fb_activity_manifest
 from prospect_os.raw_pool_loader import load_all_raw_and_checkpoint_candidates
 from validate_daily27_production import validate_production_pack
 
@@ -78,6 +79,12 @@ def main() -> int:
         help="Output directory for generated PNGs, checkpoints, and reports",
     )
     parser.add_argument(
+        "--fb-activity-manifest",
+        type=Path,
+        default=None,
+        help="JSON file of independently reviewed dated FB public-post and business-activity evidence; missing evidence stays HOLD",
+    )
+    parser.add_argument(
         "--date",
         type=str,
         default=date.today().isoformat(),
@@ -102,6 +109,8 @@ def main() -> int:
         strict_exclude_unsent_daily_locks=args.strict_exclude_unsent_daily_locks,
     )
     candidates = load_all_raw_and_checkpoint_candidates(args.downloads_dir)
+    fb_activity_path = args.fb_activity_manifest or args.downloads_dir / "fb_activity_evidence.json"
+    fb_activity_imported = apply_fb_activity_manifest(candidates, fb_activity_path) if fb_activity_path.is_file() else 0
 
     pipeline = Daily27Pipeline(
         output_dir=args.output_dir,
@@ -114,6 +123,8 @@ def main() -> int:
 
     summary_out = {
         "run_date": args.date,
+        "fb_activity_manifest_found": fb_activity_path.is_file(),
+        "fb_activity_evidence_records_imported": fb_activity_imported,
         "mode": "strict_net_new" if args.strict_exclude_unsent_daily_locks else "resume_and_backfill",
         "validation_passed": validation["structural_and_integrity_valid"],
         "quota_27_strict_send_ready_met": validation["quota_fully_met_27_send_ready"],
