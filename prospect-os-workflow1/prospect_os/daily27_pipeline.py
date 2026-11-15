@@ -23,6 +23,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .fb_activity_gate import verify_facebook_activity
 from .checkpoint_cache import PipelineCheckpointCache, run_with_retry
 from .cross_channel_dedupe import CrossChannelDedupeEngine, normalize_domain_key
 from .daily27_models import (
@@ -64,7 +65,8 @@ class Daily27Pipeline:
         candidates: list[CandidateRecord],
         run_date: str | None = None,
     ) -> dict[str, Any]:
-        run_date = run_date or date.today().isoformat()
+        run_date = run_date or datetime.now(timezone.utc).date().isoformat()
+        as_of = date.fromisoformat(run_date)
         now_utc = datetime.now(timezone.utc).isoformat()
         seen_in_batch: set[str] = set()
 
@@ -87,6 +89,7 @@ class Daily27Pipeline:
             "failed_icp_headcount_or_independence": 0,
             "failed_channel_route_missing_or_invalid": 0,
             "held_channel_unverified_human_or_fb_page_only": 0,
+            "held_fb_activity_not_verified": 0,
             "passed_low_cost_screening": 0,
         }
 
@@ -151,6 +154,16 @@ class Daily27Pipeline:
                 processed_records.append(rec)
                 continue
 
+            # FB hard freshness gate: old PASS text and website-only activity NEVER
+            # qualify a personal Messenger prospect. No costly PNG for stale/unknown FB.
+            if ch == "FB" and not verify_facebook_activity(rec, as_of):
+                rec.stage = "HOLD_FB_ACTIVITY"
+                rec.low_cost_screen_passed = False
+                loss_breakdown["held_fb_activity_not_verified"] += 1
+                rejected_or_hold_pool.append(rec)
+                processed_records.append(rec)
+                continue
+
             if route_ok and rec.contact_qualified:
                 rec.low_cost_screen_passed = True
                 rec.stage = "ICP_PASS"
@@ -178,7 +191,7 @@ class Daily27Pipeline:
                 key=lambda r: (
                     1 if r.recipient_verified else 0,
                     1 if r.raw_web_screenshot_path else 0,
-                    1 if r.recent_30d_activity_status.startswith("PASS") or r.recent_30d_activity_status.startswith("VERIFIED") else 0,
+                    1 if (r.fb_activity_verified if ch == "FB" else r.recent_30d_activity_status.startswith(("PASS", "VERIFIED"))) else 0,
                     1 if (r.estimated_max_employees or 50) <= 20 else 0,
                 ),
                 reverse=True,
@@ -186,13 +199,13 @@ class Daily27Pipeline:
             selected = qualified_sorted[:target_count]
             # If qualified candidates are fewer than target_count, fill remaining research slots from provisional pool
             # (strictly keeping their stage as HOLD and contact_qualified=False so they never fake SEND_READY!)
-            if len(selected) < target_count and self.render_provisional_cards:
+            if ch != "FB" and len(selected) < target_count and self.render_provisional_cards:
                 needed = target_count - len(selected)
                 prov_sorted = sorted(
                     channel_provisional_pools[ch],
                     key=lambda r: (
                         1 if r.raw_web_screenshot_path else 0,
-                        1 if r.recent_30d_activity_status.startswith("PASS") else 0,
+                        1 if (r.fb_activity_verified if ch == "FB" else r.recent_30d_activity_status.startswith("PASS")) else 0,
                     ),
                     reverse=True,
                 )
@@ -293,7 +306,8 @@ class Daily27Pipeline:
             "image_completed_study_fact_card": sum(
                 1 for r in all_slot_records if r.image_completed and r.evidence_card_type == "STUDY_FACT_CARD"
             ),
-            "contact_qualified": sum(1 for r in processed_records if r.contact_qualified),
+            "contact_qualified": sum(1 for r in processed_records if r.low_cost_screen_passed and r.contact_qualified),
+            "fb_activity_verified": sum(1 for r in processed_records if r.channel == "FB" and r.fb_activity_verified),
             "contact_qualified_with_verified_human_recipient": sum(
                 1 for r in processed_records if r.contact_qualified and r.recipient_verified
             ),

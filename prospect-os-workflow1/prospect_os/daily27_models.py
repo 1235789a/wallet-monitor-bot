@@ -52,6 +52,19 @@ class AITestRecord:
 
 
 @dataclass
+class ActivityProof:
+    """One public original activity post, reviewed by a human/authorized reader."""
+    source_url: str = ""                    # exact article/post, never a homepage
+    activity_date: str = ""                 # published YYYY-MM-DD
+    checked_at_utc: str = ""                # actual recent UTC source review time
+    excerpt: str = ""                       # content, not just title/metadata
+    subject_type: str = ""                  # COMPANY or CONTACT_PERSON
+    subject_confirmed: bool = False        # manually matched to firm/recipient
+    capture_path: str = ""                  # local genuine public source screenshot
+    capture_sha256: str = ""                # actual capture bytes, not a claimed hash
+
+
+@dataclass
 class CandidateRecord:
     """Unified prospect record preserving original_prospect_id end-to-end."""
     original_prospect_id: str
@@ -92,7 +105,10 @@ class CandidateRecord:
     observed_site_fact: str = ""
     recent_30d_activity_status: str = "UNKNOWN"
     recent_30d_activity_evidence: str = ""
-    recent_30d_activity_url: str = ""
+    recent_30d_activity_url: str = ""       # legacy field, not verification
+    business_activity_proof: ActivityProof = field(default_factory=ActivityProof)
+    fb_activity_proof: ActivityProof = field(default_factory=ActivityProof)
+    fb_activity_verified: bool = False
     buyer_question: str = ""
     buyer_scenario: str = ""
     geo_opportunity_hypothesis: str = ""

@@ -3,13 +3,17 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import hashlib
+import json
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "prospect-os-workflow1"))
 sys.path.insert(0, str(ROOT / "scripts"))
 from validate_daily27_production import is_valid_tg_url, is_valid_wa_url, validate_production_pack
 from prospect_os.cross_channel_dedupe import CrossChannelDedupeEngine
-from prospect_os.daily27_models import AITestRecord, CandidateRecord
+from prospect_os.daily27_models import AITestRecord, ActivityProof, CandidateRecord
+from prospect_os.fb_activity_gate import check_activity_proof, verify_facebook_activity, apply_fb_activity_manifest
 from prospect_os.daily27_pipeline import Daily27Pipeline
 from prospect_os.geo_image_renderer import render_geo_card_png
 from prospect_os.icp_and_channel_gate import verify_channel_route, verify_icp_and_segment
@@ -240,6 +244,141 @@ class TestMultiHubDaily27Pipeline(unittest.TestCase):
             self.assertEqual(manifest["pairing_fail_count"], 0)
             self.assertFalse(manifest["historical_ledgers_overwritten"])
 
-    unittest.main(verbosity=2)
+
+
+    def _fresh_activity_proofs(self, folder: Path) -> tuple[ActivityProof, ActivityProof]:
+        now = datetime.now(timezone.utc)
+        screenshot = folder / "real-public-post.png"
+        screenshot.write_bytes(b"\x89PNG\r\n\x1a\n" + b"evidence image pixels" * 20)
+        digest = hashlib.sha256(screenshot.read_bytes()).hexdigest()
+        common = {
+            "activity_date": now.date().isoformat(),
+            "checked_at_utc": now.isoformat(),
+            "excerpt": "We launched a new customer-facing software product this week.",
+            "subject_confirmed": True,
+            "capture_path": str(screenshot),
+            "capture_sha256": digest,
+        }
+        business = ActivityProof(
+            source_url="https://example.org/news/customer-launch-2026",
+            subject_type="COMPANY",
+            **common,
+        )
+        personal = ActivityProof(
+            source_url="https://www.facebook.com/founder.name/posts/123456789",
+            subject_type="CONTACT_PERSON",
+            **common,
+        )
+        return business, personal
+
+    def test_fb_activity_rejects_legacy_pass_without_real_posts(self) -> None:
+        rec = CandidateRecord(
+            original_prospect_id="OLD-FB", company_name="Old client",
+            discovery_source_url="https://clutch.co/developers",
+            channel="FB", recipient_verified=True, fb_route_type="PERSON",
+            recent_30d_activity_status="PASS_COMPANY_BLOG_2026-06-30",
+            recent_30d_activity_evidence="June 2026 publication",
+            recent_30d_activity_url="https://example.org/",
+        )
+        self.assertFalse(verify_facebook_activity(rec, datetime.now(timezone.utc).date()))
+        self.assertEqual(rec.recent_30d_activity_status, "HOLD_FB_ACTIVITY_UNVERIFIED")
+        self.assertTrue(any("DATE_MISSING" in v for v in rec.hold_or_reject_reasons))
+        self.assertFalse(rec.fb_activity_verified)
+
+    def test_fb_activity_accepts_two_exact_recent_reviewed_captures(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            business, personal = self._fresh_activity_proofs(Path(folder))
+            rec = CandidateRecord(
+                original_prospect_id="OK-FB", company_name="Studio",
+                discovery_source_url="https://clutch.co/developers",
+                channel="FB", recipient_verified=True, fb_route_type="PERSON",
+                business_activity_proof=business, fb_activity_proof=personal,
+            )
+            self.assertTrue(verify_facebook_activity(rec, datetime.now(timezone.utc).date()))
+            self.assertTrue(rec.fb_activity_verified)
+            self.assertEqual(rec.recent_30d_activity_status, "VERIFIED_FB_PUBLIC_POST_WITH_CAPTURE_30D")
+
+    def test_fb_activity_rejects_old_future_unknown_and_expired_review(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            business, personal = self._fresh_activity_proofs(Path(folder))
+            today = datetime.now(timezone.utc).date()
+            personal.activity_date = (today - timedelta(days=31)).isoformat()
+            self.assertTrue(any("STALE_31D" in s for s in check_activity_proof(personal, as_of=today, kind="FB_POST")))
+            personal.activity_date = (today + timedelta(days=1)).isoformat()
+            self.assertTrue(any("FUTURE_DATE" in s for s in check_activity_proof(personal, as_of=today, kind="FB_POST")))
+            personal.activity_date = today.isoformat()
+            personal.checked_at_utc = (datetime.now(timezone.utc) - timedelta(days=4)).isoformat()
+            self.assertTrue(any("REVIEW_EXPIRED" in s for s in check_activity_proof(personal, as_of=today, kind="FB_POST")))
+            personal.checked_at_utc = datetime.now(timezone.utc).isoformat()
+            personal.source_url = "https://www.facebook.com/founder.name/"
+            self.assertTrue(any("NOT_A_SPECIFIC_PUBLIC_POST" in s for s in check_activity_proof(personal, as_of=today, kind="FB_POST")))
+            personal.source_url = "https://www.facebook.com/founder.name/posts/123456789"
+            personal.capture_sha256 = "0" * 64
+            self.assertTrue(any("HASH_MISMATCH" in s for s in check_activity_proof(personal, as_of=today, kind="FB_POST")))
+
+    def test_fb_activity_rejects_page_only_even_with_public_post(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            business, personal = self._fresh_activity_proofs(Path(folder))
+            rec = CandidateRecord(
+                original_prospect_id="FB-PAGE", company_name="Company",
+                discovery_source_url="https://clutch.co/developers",
+                channel="FB", recipient_verified=False, fb_route_type="COMPANY_PAGE",
+                business_activity_proof=business, fb_activity_proof=personal,
+            )
+            self.assertFalse(verify_facebook_activity(rec, datetime.now(timezone.utc).date()))
+            self.assertIn("HOLD_FB_ACTIVITY_NO_VERIFIED_PERSONAL_RECIPIENT", rec.hold_or_reject_reasons)
+
+    def test_fb_pipeline_refuses_stale_post_even_if_route_person_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            from prospect_os.cross_channel_dedupe import CrossChannelDedupeEngine
+            dedupe = CrossChannelDedupeEngine()
+            dedupe.mark_all_required_sources_loaded()
+            business, personal = self._fresh_activity_proofs(Path(folder))
+            personal.activity_date = (datetime.now(timezone.utc).date() - timedelta(days=70)).isoformat()
+            rec = CandidateRecord(
+                original_prospect_id="FB-STALE-01",
+                company_name="Fresh Studio",
+                discovery_source_url="https://clutch.co/developers",
+                official_url="https://freshstudio.example/",
+                canonical_domain="freshstudio.example",
+                claimed_size_range="2 - 9",
+                channel="FB",
+                contact_url="https://www.facebook.com/founder.name",
+                fb_route_type="PERSON",
+                recipient_verified=True,
+                observed_site_fact="Independent service studio.",
+                business_activity_proof=business,
+                fb_activity_proof=personal,
+            )
+            pipeline = Daily27Pipeline(output_dir=Path(folder) / "run", dedupe_engine=dedupe)
+            report = pipeline.run([rec])
+            self.assertEqual(report["loss_breakdown"]["held_fb_activity_not_verified"], 1)
+            self.assertEqual(report["funnel_metrics"]["by_channel_slot_filled"]["FB"], 0)
+            self.assertEqual(report["funnel_metrics"]["fb_activity_verified"], 0)
+            self.assertEqual(report["funnel_metrics"]["strict_send_ready"], 0)
+            self.assertEqual(report["hold_or_rejected_summary"][0]["stage"], "HOLD_FB_ACTIVITY")
+
+    def test_fb_manifest_import_rechecks_evidence_instead_of_trusting_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            business, personal = self._fresh_activity_proofs(Path(folder))
+            rec = CandidateRecord(
+                original_prospect_id="FB-MANIFEST", company_name="Agency",
+                discovery_source_url="https://clutch.co/developers",
+                channel="FB", recipient_verified=True, fb_route_type="PERSON",
+            )
+            file = Path(folder) / "fb_activity_evidence.json"
+            from dataclasses import asdict
+            file.write_text(json.dumps({"records": [{
+                "original_prospect_id": rec.original_prospect_id,
+                "business_activity_proof": asdict(business),
+                "fb_activity_proof": asdict(personal),
+                "send_ready": True,
+                "recent_30d_activity_status": "PASS",
+            }]}), encoding="utf-8")
+            self.assertEqual(apply_fb_activity_manifest([rec], file), 1)
+            self.assertFalse(rec.send_ready)
+            self.assertFalse(rec.fb_activity_verified)
+            self.assertTrue(verify_facebook_activity(rec, datetime.now(timezone.utc).date()))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

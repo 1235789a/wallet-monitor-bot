@@ -16,6 +16,33 @@ Optimize **verified net profit per unit of operator effort**, not message counts
 5. Do not automatically message, add friends, scrape private group members, bypass login gates/rate limits, rotate identities, or simulate activity. No automated engagement or bulk sending. Respect declines and contact preferences. Only user-approved, manually sent outreach through suitable business contact routes.
 6. Regulated industries are research-only by default and require their separate compliant gate; do not draft promotion or route them into general outreach.
 
+## Mandatory FB 30-day public activity evidence gate (2026-11-15)
+
+**This overrides old PASS tags or directory activity labels.** For a Facebook prospect to
+qualify as a reachable *active personal* business contact, inspect and capture BOTH:
+1. A company-specific dated commercial update in the last 30 calendar days (real
+   publication/event, not an evergreen homepage), with a direct exact-source URL.
+2. A dated **public post by the actual intended Facebook business recipient** in the
+   last 30 days (a corporate Page post or Google snippet alone does not prove a
+   person's activity). Link to the exact post, not the Page/profile home.
+Record publication YYYY-MM-DD, researcher read-back timestamp in UTC (reviewed in
+the last 3 days), short quoted/paraphrased post excerpt, actor/company identity
+confirmation and original screen capture with exact SHA256. Recheck whether a
+profile matches the actual recipient; check Messenger DM accessibility/permission
+**separately**. No unauthorized private-group access or scraping.
+
+The Python pipeline enforces this using
+`prospect-os-workflow1/prospect_os/fb_activity_gate.py`.
+Provide reviewed proof records via CLI
+`--fb-activity-manifest <local JSON>` (schema in
+`prospect-os-workflow1/system/fb-activity-verification.md`).
+If unavailable, stale, undated, unidentifiable or without a real capture,
+mark `HOLD_FB_ACTIVITY`. Never infer activity from an `online` badge,
+a historical PASS label, a company website with no date, or an unverified search
+snippet. **HOLD cannot occupy one of the ten qualified FB slots**; report a
+shortfall and continue looking instead of filling it with Page-only contacts.
+No automatic messaging and no guaranteed reply rate.
+
 ## Default run on request such as '给我一批 FB 多行业客户'
 ### Stage 0 — Reconcile and exclude
 - Read Drive `MultiHub GE v2.1｜RECONCILIATION_LEDGER`, `MultiHub Prospect OS` historical lists, prior FB candidates, and known sent/declined statuses. Original (read-only) SOP: https://docs.google.com/document/d/1U4RHCntmoNRyGXZgkYoAYXi1J5WqHymGShdeQJZgMQo/edit . Current GitHub outreach policy: `prospect-os-workflow1/system/outreach-message-policy.md`.
