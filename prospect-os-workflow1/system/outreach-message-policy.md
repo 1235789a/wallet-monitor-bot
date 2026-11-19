@@ -41,3 +41,9 @@
 输出 outreach.language、channel、message_mode、recommended_first_message、cta、personalization_fact、buyer_query_used、visibility_evidence_used、message_candidates 与 message_quality。REVIEW 时 buyer_query_used 必须为 null，visibility_evidence_used 必须为 false。
 
 WhatsApp 仅认明确的 WhatsApp 直聊链接；电话不能升级为 WA。Telegram 必须是经核验的真人/企业账号直聊页，群、频道、bot、邀请和分享页均不能作为直聊入口。联系路由不合格时不生成可发送话术。
+
+## Mandatory Humanizer review
+
+Apply `.codex/skills/humanizer/SKILL.md` and `system/conversation-copy-policy.md`
+to every prospect-facing draft. The conversation policy governs warm replies,
+case delivery and X comments; do not reuse cold first-touch scripts in those stages.

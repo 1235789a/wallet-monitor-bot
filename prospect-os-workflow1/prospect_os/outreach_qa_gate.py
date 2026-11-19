@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from .daily27_models import CandidateRecord
+from .outreach_humanizer import humanizer_issues
 
 BANNED_JARGON_PATTERNS = [
     r"\boverseas founder inquiries\b",
@@ -43,7 +44,7 @@ def _clean_service_phrase(rec: CandidateRecord) -> str:
         svc = rec.observed_site_fact.split(".")[0][:60]
     svc = re.sub(r"\s+", " ", svc).strip(" .,;:-")
     if not svc:
-        svc = "custom software and AI engineering"
+        return ""
     # Keep concise
     words = svc.split()
     if len(words) > 8:
@@ -59,6 +60,9 @@ def generate_personalized_first_touch(rec: CandidateRecord) -> str:
 
     co = rec.company_name.strip()
     svc = _clean_service_phrase(rec)
+    if not svc or not co:
+        rec.first_contact_draft = ""
+        return ""
 
     if rec.recipient_verified and rec.recipient_name:
         first_name = rec.recipient_name.strip().split()[0]
@@ -66,23 +70,20 @@ def generate_personalized_first_touch(rec: CandidateRecord) -> str:
     else:
         greeting = f"Hi {co} team,"
 
-    if rec.ai_test.is_strict_live_proof:
+    if not rec.recipient_verified:
         msg = (
-            f"{greeting} I'm with MultiHub. In a recorded {rec.ai_test.platform} check for {svc}, "
-            f"we mapped which providers and sources appeared for buyers. "
-            f"Would you like me to share the snapshot for {co}?"
+            f"{greeting} I'm with MultiHub. We help companies check if ChatGPT recommends them. "
+            f"Who handles new customer enquiries at {co}?"
         )
-    elif rec.recipient_verified:
+    elif rec.ai_test.is_strict_live_proof:
         msg = (
-            f"{greeting} I'm with MultiHub. I saw {co}'s work on {svc}. "
-            f"We help specialist teams check how they appear when buyers ask ChatGPT for provider recommendations. "
-            f"Would one example buyer-search check for {co} be useful?"
+            f"{greeting} I'm with MultiHub. I checked {rec.ai_test.platform} for {svc} "
+            f"and saved the results for {co}. Can I send you the screenshot?"
         )
     else:
         msg = (
             f"{greeting} I'm with MultiHub. I saw {co} offers {svc}. "
-            f"We help B2B teams check how they appear when buyers ask ChatGPT to recommend providers. "
-            f"Are you the right person to discuss this with?"
+            f"Can I check if ChatGPT recommends you when someone needs that service?"
         )
 
     rec.first_contact_draft = msg
@@ -101,7 +102,7 @@ def evaluate_outreach_qa(rec: CandidateRecord) -> CandidateRecord:
     if not text:
         text = generate_personalized_first_touch(rec)
 
-    issues: list[str] = []
+    issues: list[str] = humanizer_issues(text)
     words = re.findall(r"\b[\w'’-]+\b", text)
     word_count = len(words)
 
@@ -115,7 +116,7 @@ def evaluate_outreach_qa(rec: CandidateRecord) -> CandidateRecord:
         issues.append("missing_sender_identity_multihub")
     if rec.company_name.split()[0].casefold() not in text.casefold():
         issues.append("missing_company_personalization")
-    if not re.search(r"\b(?:chatgpt|perplexity|ai|recommend)", text, re.I):
+    if not re.search(r"\b(?:chatgpt|perplexity|gemini|claude|copilot|ai|recommend)", text, re.I):
         issues.append("missing_plain_language_service_explanation")
 
     for pat in BANNED_JARGON_PATTERNS:

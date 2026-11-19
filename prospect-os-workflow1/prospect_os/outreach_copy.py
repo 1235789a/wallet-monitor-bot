@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from .contact_reachability import outreach_route, route_identity
+from .outreach_humanizer import HUMANIZER_PROMPT, humanizer_issues
 
 SUPPORTED_LANGUAGES = {"en", "pt-BR", "pt-PT", "es"}
 PRELOCK_REVIEW = "PRELOCK_REVIEW"
@@ -241,7 +242,7 @@ def build_generation_prompt(record: dict[str, Any]) -> dict[str, Any]:
             "Use concrete local-search/customer language; avoid abstract 'buyer searches' or "
             "'one search check'. Never promise replies, rankings or revenue. "
             "rewrite at most twice. Return MESSAGE_REVIEW_REQUIRED if either draft still has "
-            "a hard failure. Never send."
+            "a hard failure. Never send." + HUMANIZER_PROMPT
         ),
     }
 
@@ -258,7 +259,7 @@ def review_candidate(record: dict[str, Any], candidate: dict[str, Any]) -> dict[
     lowered = _fold(message)
     mode = str(candidate.get("message_mode") or "")
     prelock = str(record.get("prelock_status") or "PRELOCK_REVIEW")
-    errors: list[str] = []
+    errors: list[str] = humanizer_issues(message)
     issues: list[str] = []
     evidence = _evidence_map(record)
     direct, route_error = _direct_route(record)
@@ -477,6 +478,7 @@ def review_and_select(record: dict[str, Any], candidates: list[dict[str, Any]]) 
         message_mode=winner.get("message_mode"),
         message_intent=winner.get("message_intent", "buyer_search"),
         recommended_first_message=winner.get("message"),
+        chinese_translation=winner.get("chinese_translation"),
         cta=winner.get("cta"),
         personalization_fact=winner.get("personalization_fact"),
         buyer_query_used=score["buyer_query_used"],
@@ -488,7 +490,7 @@ def review_and_select(record: dict[str, Any], candidates: list[dict[str, Any]]) 
 
 def validate_legacy_first_message(item: dict[str, Any], message: str) -> tuple[list[str], dict[str, Any]]:
     """Compatibility checks for workflow1_daily's existing first_message field."""
-    errors: list[str] = []
+    errors: list[str] = humanizer_issues(message)
     issues: list[str] = []
     lower = _fold(message)
     count = word_count(message)
