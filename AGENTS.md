@@ -15,3 +15,11 @@ search/AI results or equate prepared material with sent outreach.
 ## Active MultiHub daily lead standard — 2026-10-31
 
 Use `prospect-os-workflow1/system/daily-27-policy.md` (based on the user's 2026-10-29 Drive evidence-image SOP) for the current 15 WA + 2 TG + 10 FB allocation, including three regulated retail **research-only** experiment slots within WA. Keep separate ICP_PASS / ASSET_READY / SEND_READY stages, current Drive-wide automatic presented-client deduplication and the saved revised natural-language first-contact style. Old 10+2 / 12+2 / 12+3 / 24+6 quotas are historical only. Preserve existing safeguards for evidence, legal contact, human recipient and no automatic sending.
+
+## Conversation copy quality gate
+
+For every first message, case caption, X comment, reply and followup, read
+`.codex/skills/humanizer/SKILL.md` and
+`prospect-os-workflow1/system/conversation-copy-policy.md`. Apply the Humanizer
+rewrite pass and stage-aware checks before presenting any prospect-facing copy.
+Preserve the evidence gates and the existing ban on automated sending.

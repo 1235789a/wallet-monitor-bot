@@ -63,3 +63,9 @@ FB: six search-indexed personal profiles tied to companies remain DM_UNVERIFIED;
 Original 27 study fact cards ≠ original AI test evidence, and strict SEND_READY = 0.
 
 No sending, unauthorized account login, invented source screenshots, fake ChatGPT rankings, restricted product promotion, false history clearance or quota-filling duplicates.
+
+## Conversation copy gate
+
+Read `.codex/skills/humanizer/SKILL.md` and `system/conversation-copy-policy.md`
+before finalizing outreach. Apply the Humanizer rewrite pass and the runtime lint;
+passing the lint does not authorize sending or replace evidence checks.

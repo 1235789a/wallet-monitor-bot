@@ -14,7 +14,7 @@ the original company IDs and never inflate new-client counts.
 
 Use for first-contact WhatsApp/Telegram drafts only. Prospect OS stays at research → draft → human review; never send messages.
 
-1. Read prospect-os-workflow1/system/outreach-message-policy.md and references/message-rules.md in this Skill.
+1. Read prospect-os-workflow1/system/outreach-message-policy.md, references/message-rules.md, .codex/skills/humanizer/SKILL.md, and prospect-os-workflow1/system/conversation-copy-policy.md. Apply Humanizer to both variants before semantic review; output the chosen message with an idiomatic Chinese translation separately.
 2. Read only the supplied prospect record and cited evidence. Do not perform new research or add facts.
 3. Determine channel, market language, Track A/B, and PRELOCK state. Apply the stricter PRELOCK_REVIEW gate whenever buyer-query and visibility proof are incomplete.
 4. Check the selected route's recipient assessment first. Customer-service/bot routes receive no recommended outreach draft. Unverified WhatsApp routes use recipient_check only, asking for the person responsible for marketing or new customers without a search-check pitch.

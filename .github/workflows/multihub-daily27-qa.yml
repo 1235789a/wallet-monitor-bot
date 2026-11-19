@@ -9,6 +9,7 @@ on:
       - "scripts/run_daily27_pipeline.py"
       - "scripts/validate_daily27_production.py"
       - "scripts/test_daily27_runtime.py"
+      - "prospect-os-workflow1/test_outreach*.py"
   workflow_dispatch:
 jobs:
   unit-tests:
@@ -26,3 +27,6 @@ jobs:
         run: python -m unittest discover -s scripts -p "test_validate_daily_evidence.py" -v
       - name: Test new Daily27 pipeline
         run: python scripts/test_daily27_runtime.py
+      - name: Test outreach copy and conversation Humanizer
+        working-directory: prospect-os-workflow1
+        run: python -m unittest test_outreach_copy test_outreach_humanizer -v
