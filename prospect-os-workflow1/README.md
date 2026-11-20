@@ -343,3 +343,26 @@ equates a business account with a decision maker.
 
 See [system/source-pool-integrations.md](system/source-pool-integrations.md) for evaluated upstream
 projects, enabled adapters and deliberately disabled integrations.
+
+### Growth Lab writeback
+
+Growth Lab is a post-qualification stage. Export an existing batch with
+`primary_slot_records`, preserving each `original_prospect_id` and official URL.
+Register the same prospect ID and domain in the Lab. Keep the assignment file
+and report tokens in private storage.
+
+```bash
+python sync_growth_lab.py existing-batch.json private-assignments.json enriched-batch.json --history private-lab-history/
+```
+
+Set `LAB_URL` and `LAB_ADMIN_TOKEN` with the authorized instance and secret.
+Assignment entries are keyed by the original ID and require `companyId`.
+Optional `report` fields are `reportId`, `path` and `expiresAt` copied from
+Lab. Optional `drafts` map first touch and follow-up to `english`,
+`chinese_translation` and a conversation `stage`. The existing Humanizer lints
+each draft. Review the conversation context and claim sources before use.
+
+The enriched output adds the Lab stage, evidence, report, visits, order and
+delivery fields. Source acquisition records and previous history remain intact.
+A report with no accessible HTTPS link stays in HOLD. The bridge does not send
+messages or change acquisition quotas.
