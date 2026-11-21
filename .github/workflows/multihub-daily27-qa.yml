@@ -30,3 +30,6 @@ jobs:
       - name: Test outreach copy and conversation Humanizer
         working-directory: prospect-os-workflow1
         run: python -m unittest test_outreach_copy test_outreach_humanizer -v
+      - name: Test Facebook discovery capability preflight
+        working-directory: prospect-os-workflow1
+        run: python -m unittest test_fb_discovery_preflight -v

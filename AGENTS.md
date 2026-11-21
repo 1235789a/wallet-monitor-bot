@@ -23,3 +23,7 @@ For every first message, case caption, X comment, reply and followup, read
 `prospect-os-workflow1/system/conversation-copy-policy.md`. Apply the Humanizer
 rewrite pass and stage-aware checks before presenting any prospect-facing copy.
 Preserve the evidence gates and the existing ban on automated sending.
+
+## Facebook activity-first source preflight (2026-11-21)
+
+Before any bulk Facebook research, execute `prospect-os-workflow1/system/fb-discovery-preflight.md` and its source capability CLI. No user-assisted prospect discovery is required. Missing public access is HOLD or a source switch, never permission to relax the existing personal activity and company evidence gates. Do not change WA/TG or count alternative routes as FB.
