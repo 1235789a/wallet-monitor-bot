@@ -73,6 +73,11 @@ def outreach_route(contact: dict[str, Any], website: str) -> dict[str, str]:
 
 def merge_contact_route(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     """Retain better route evidence; incompatible uses require review."""
+    # A published link observed later supersedes a generated labelled-number
+    # candidate, not the reverse. Retain purpose/human conflict rules below.
+    if (existing.get("route_verification_status") == "OFFICIAL_LABEL_NUMBER_GENERATED_UNVERIFIED"
+            and not incoming.get("route_verification_status")):
+        existing, incoming = incoming, existing
     merged = dict(existing)
     left = (existing.get("outreach_route") or {}).get("purpose", UNKNOWN)
     right = (incoming.get("outreach_route") or {}).get("purpose", UNKNOWN)

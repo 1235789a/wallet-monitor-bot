@@ -7,7 +7,7 @@ Implements the complete 11-stage workflow:
   4. Low-Cost ICP Qualification (2-20 preferred, <=50 max; GEO/SEO peer -> PARTNER_CANDIDATE;
      3 Regulated Retail -> RESEARCH_ONLY)
   5. Channel Route Verification (WA business route, TG non-bot/non-group/non-channel, FB page vs person)
-  6. Recent 30-Day Activity & Buyer Scenario Verification + Automatic Slot Replacement / Backfill
+  6. Recent Activity (WA 60d; FB 30d) & Buyer Scenario Verification + Automatic Slot Replacement / Backfill
   7. Authentic Evidence Archival (raw website screenshots / text + live AI test records if present)
   8. 1080x1350 English GEO PNG Generation (only after low-cost screening passes; SHA256 verified)
   9. Personalized First-Touch Copy Generation & Outreach QA Gate
@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .fb_activity_gate import verify_facebook_activity
+from .wa_activity_gate import verify_wa_activity
 from .checkpoint_cache import PipelineCheckpointCache, run_with_retry
 from .cross_channel_dedupe import CrossChannelDedupeEngine, normalize_domain_key
 from .daily27_models import (
@@ -90,6 +91,7 @@ class Daily27Pipeline:
             "failed_channel_route_missing_or_invalid": 0,
             "held_channel_unverified_human_or_fb_page_only": 0,
             "held_fb_activity_not_verified": 0,
+            "held_wa_activity_not_verified": 0,
             "passed_low_cost_screening": 0,
         }
 
@@ -164,6 +166,14 @@ class Daily27Pipeline:
                 processed_records.append(rec)
                 continue
 
+            if ch == "WA" and not verify_wa_activity(rec, as_of):
+                rec.stage = "HOLD_WA_ACTIVITY"
+                rec.low_cost_screen_passed = False
+                loss_breakdown["held_wa_activity_not_verified"] += 1
+                rejected_or_hold_pool.append(rec)
+                processed_records.append(rec)
+                continue
+
             if route_ok and rec.contact_qualified:
                 rec.low_cost_screen_passed = True
                 rec.stage = "ICP_PASS"
@@ -191,7 +201,7 @@ class Daily27Pipeline:
                 key=lambda r: (
                     1 if r.recipient_verified else 0,
                     1 if r.raw_web_screenshot_path else 0,
-                    1 if (r.fb_activity_verified if ch == "FB" else r.recent_30d_activity_status.startswith(("PASS", "VERIFIED"))) else 0,
+                    1 if (r.fb_activity_verified if ch == "FB" else r.wa_activity_verified if ch == "WA" else r.recent_30d_activity_status.startswith(("PASS", "VERIFIED"))) else 0,
                     1 if (r.estimated_max_employees or 50) <= 20 else 0,
                 ),
                 reverse=True,
@@ -274,7 +284,8 @@ class Daily27Pipeline:
                 and rec.image_completed
                 and rec.outreach_qa_status == "PASS"
             ):
-                if rec.strict_evidence_verified:
+                wa_permission_ok = (rec.channel != "WA" or (rec.wa_account_verified and rec.recipient_opt_in_status == "VERIFIED"))
+                if rec.strict_evidence_verified and wa_permission_ok:
                     rec.send_ready = True
                     rec.stage = "SEND_READY"
                 else:
@@ -282,10 +293,10 @@ class Daily27Pipeline:
                     # but uses STUDY_FACT_CARD (AI live test not run) -> ASSET_READY_WEBSITE_FACT_ONLY
                     rec.send_ready = False
                     rec.stage = "ASSET_READY"
-                    rec.hold_or_reject_reasons.append(
-                        "HOLD_STRICT_AI_PROOF: Website fact card (STUDY_FACT_CARD) & founder route verified, "
-                        "but live AI recommendation screenshot proof not yet archived"
-                    )
+                    if not rec.strict_evidence_verified:
+                        rec.hold_or_reject_reasons.append("HOLD_STRICT_AI_PROOF: live AI recommendation screenshot proof not yet archived")
+                    if not wa_permission_ok:
+                        rec.hold_or_reject_reasons.append("HOLD_WA_ACCOUNT_OR_OPT_IN: website route is not account or consent verification")
             elif rec.image_completed and rec.outreach_qa_status == "PASS" and rec.low_cost_screen_passed:
                 rec.send_ready = False
                 rec.stage = "ASSET_READY"
@@ -308,6 +319,7 @@ class Daily27Pipeline:
             ),
             "contact_qualified": sum(1 for r in processed_records if r.low_cost_screen_passed and r.contact_qualified),
             "fb_activity_verified": sum(1 for r in processed_records if r.channel == "FB" and r.fb_activity_verified),
+            "wa_activity_verified": sum(1 for r in processed_records if r.channel == "WA" and r.wa_activity_verified),
             "contact_qualified_with_verified_human_recipient": sum(
                 1 for r in processed_records if r.contact_qualified and r.recipient_verified
             ),

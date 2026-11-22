@@ -226,8 +226,12 @@ def render_geo_card_png(rec: CandidateRecord, output_dir: Path) -> CandidateReco
             max_lines=5,
         )
         cur_y += 16
-        draw.text((68, cur_y), "2. Recent 30-Day Activity & Buyer Context:", font=f_sec, fill=INK_DARK)
-        act_str = f"Activity Status: {rec.recent_30d_activity_status}. {rec.recent_30d_activity_evidence or 'No dated 30-day publication verified yet.'}"
+        activity_window = 60 if rec.channel == "WA" else 30
+        draw.text((68, cur_y), f"2. Recent {activity_window}-Day Activity & Buyer Context:", font=f_sec, fill=INK_DARK)
+        if rec.channel == "WA":
+            act_str = f"Activity Status: {rec.wa_activity_status}. {rec.business_activity_proof.excerpt or 'No dated business activity verified yet.'}"
+        else:
+            act_str = f"Activity Status: {rec.recent_30d_activity_status}. {rec.recent_30d_activity_evidence or 'No dated 30-day publication verified yet.'}"
         cur_y = _draw_wrapped(draw, act_str, 68, cur_y + 32, max_chars=72, font=f_body, fill=INK_MUTED, max_lines=3)
 
         if rec.ai_test.tested and not is_live_ai:

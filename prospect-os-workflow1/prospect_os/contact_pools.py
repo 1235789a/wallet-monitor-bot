@@ -67,6 +67,8 @@ def _usable_contact(contact, channel, website):
         return False
     host = (urlsplit(url).hostname or '').casefold().removeprefix('www.')
     if channel == 'whatsapp':
+        if contact.get('route_verification_status') == 'OFFICIAL_LABEL_NUMBER_GENERATED_UNVERIFIED':
+            return False
         if host not in {'wa.me', 'api.whatsapp.com', 'web.whatsapp.com', 'whatsapp.com'}:
             return False
         parsed = urlsplit(url)

@@ -99,6 +99,7 @@ class CandidateRecord:
     recipient_role: str = ""
     recipient_verified: bool = False
     recipient_opt_in_status: str = "UNKNOWN"
+    wa_account_verified: bool = False
 
     # Business, activity & buyer scenario fields
     primary_service: str = ""
@@ -109,6 +110,8 @@ class CandidateRecord:
     business_activity_proof: ActivityProof = field(default_factory=ActivityProof)
     fb_activity_proof: ActivityProof = field(default_factory=ActivityProof)
     fb_activity_verified: bool = False
+    wa_activity_verified: bool = False
+    wa_activity_status: str = "UNKNOWN"
     buyer_question: str = ""
     buyer_scenario: str = ""
     geo_opportunity_hypothesis: str = ""

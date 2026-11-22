@@ -1,5 +1,7 @@
 # ACTIVE Daily27 v4.0 notice — 2026-11-07
 
+**2026-11-22 WA override:** Gemini handles WA research only; [WA website preflight](wa-website-preflight.md) is mandatory before deep research. WA commercial activity uses a 60-day window; same-day last-seen is optional. No change to FB/TG freshness, quotas, history, buyer fit, or outreach permission.
+
 The current WA15 + TG2 + FB10 **daily lead research** flow now uses [daily-27-v4.md](daily-27-v4.md) as its operational delta, together with the authoritative [Google Drive SOP](https://docs.google.com/document/d/10wKi_feQ37vOS4JTf8kx0MxJ73h5nTu5ETpGFckfjTk/edit). The original 2026-10-29 evidence authenticity rules and later hold/handoff safeguards remain binding. In this Daily27 flow only: 24 core B2B seats become up to 5 A (prioritized deep AI test) and 19 B (low-cost text-first), while the three regulated WA seats remain research-only. B does not require a preliminary PNG or fake model test. Distinguish contact permission, web evidence, AI proof, ASSET_READY, SEND_READY, actual SENT/REPLIED and PAID. Never pad quotas or score past a company-domain mismatch. The independent 30-company Buyer-Intent Sprint policy is a separate workflow; do not override it with Daily27 quotas.
 
 ---
