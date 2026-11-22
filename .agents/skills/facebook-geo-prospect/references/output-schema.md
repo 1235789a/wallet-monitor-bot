@@ -17,3 +17,5 @@ READY requires current business evidence, an appropriate verified recipient and 
 Every factual detail in the message must be backed by a cited URL or stored evidence id. No fabricated AI search results. Never assign `USER_MARKED_SENT` or `PAID` from imported claims without actual user/source confirmation.
 
 If any dataset was unavailable, report which histories/timestamps were covered and mark other duplicates unverified. This schema is a target for the agent's outputs, not a claim that existing software implements every field.
+
+2026-11-22 add `person_activity_platform,person_activity_exact_post_url,person_activity_date,person_activity_reviewed_at_utc,person_activity_capture_sha256,person_activity_grade,fb_person_dm_verified,fb_dm_reviewed_at,history_index_checked_on,history_source_coverage,record_kind`. Alternate-platform activity never substitutes for FB route proof. Partial history coverage is HOLD_HISTORY_INCOMPLETE, never NO_HISTORY_MATCH clearance.

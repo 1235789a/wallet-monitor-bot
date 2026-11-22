@@ -23,3 +23,6 @@ For every first message, case caption, X comment, reply and followup, read
 `prospect-os-workflow1/system/conversation-copy-policy.md`. Apply the Humanizer
 rewrite pass and stage-aware checks before presenting any prospect-facing copy.
 Preserve the evidence gates and the existing ban on automated sending.
+
+## 2026-11-22 dual-gate correction
+For Facebook prospects apply `prospect-os-workflow1/system/fb-activity-verification.md`: personal business activity can be proven on FB/X/LinkedIn/Instagram; Facebook personal contactability is a separate gate. Use a current private portable Drive history index plus live deltas and report per-source coverage. Missing history remains HOLD_HISTORY. Recheck existing IDs before discovery, never double-count or send automatically.

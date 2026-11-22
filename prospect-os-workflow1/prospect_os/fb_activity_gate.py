@@ -1,8 +1,8 @@
-"""Conservative, date-checked Facebook activity evidence gate (no scraping/login).
+"""Conservative, date-checked cross-platform activity evidence gate for Facebook prospects (no scraping/login).
 
 The verifier checks that a researcher preserved a dated public post, accurate local
 capture bytes, and a recent recorded review. It cannot independently determine
-the truth of Facebook page pixels, author identity, or Messenger availability.
+the truth of source page pixels, author identity, or Messenger availability.
 Those require authorized manual/public-source review; missing proof is HOLD.
 """
 
@@ -62,6 +62,27 @@ def _fb_post_permalink(url: str) -> bool:
     return False
 
 
+def _personal_post_platform(url: str) -> str:
+    """Allow exact public post permalinks, never profiles, feeds or search pages."""
+    if _fb_post_permalink(url):
+        return "FB"
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return ""
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/")
+    if host in {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}:
+        if re.fullmatch(r"/[A-Za-z0-9_]{1,15}/status/[0-9]+", path):
+            return "X"
+    if host in {"linkedin.com", "www.linkedin.com"}:
+        if re.fullmatch(r"/posts/[^/]+[-_]activity-[0-9]+(?:-[A-Za-z0-9_-]+)?", path) or re.fullmatch(r"/feed/update/urn:li:(?:activity|share|ugcPost):[0-9]+", path):
+            return "LINKEDIN"
+    if host in {"instagram.com", "www.instagram.com"}:
+        if re.fullmatch(r"/(?:p|reel)/[A-Za-z0-9_-]+", path):
+            return "INSTAGRAM"
+    return ""
+
+
 def _specific_business_source(url: str) -> bool:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
@@ -118,7 +139,7 @@ def check_activity_proof(proof: ActivityProof, *, as_of: date, kind: str) -> lis
         issues.append(f"{prefix}_SUBJECT_UNVERIFIED")
     if not proof.excerpt or len(proof.excerpt.strip()) < 16:
         issues.append(f"{prefix}_EXCERPT_MISSING")
-    if not proof.source_url or not (_fb_post_permalink(proof.source_url) if kind == "FB_POST" else _specific_business_source(proof.source_url)):
+    if not proof.source_url or not (_personal_post_platform(proof.source_url) if kind == "FB_POST" else _specific_business_source(proof.source_url)):
         issues.append(f"{prefix}_NOT_A_SPECIFIC_PUBLIC_POST")
     if not _capture_matches(proof):
         issues.append(f"{prefix}_ORIGINAL_CAPTURE_MISSING_OR_HASH_MISMATCH")
@@ -126,7 +147,7 @@ def check_activity_proof(proof: ActivityProof, *, as_of: date, kind: str) -> lis
 
 
 def verify_facebook_activity(rec: CandidateRecord, as_of: date) -> bool:
-    """Both business trigger AND a dated, attributed personal FB post are needed."""
+    """Both business activity AND a dated, attributed personal cross-platform post are needed."""
     rec.fb_activity_verified = False
     issues = check_activity_proof(rec.business_activity_proof, as_of=as_of, kind="BUSINESS")
     issues += check_activity_proof(rec.fb_activity_proof, as_of=as_of, kind="FB_POST")
@@ -138,7 +159,9 @@ def verify_facebook_activity(rec: CandidateRecord, as_of: date) -> bool:
             if reason not in rec.hold_or_reject_reasons:
                 rec.hold_or_reject_reasons.append(reason)
         return False
-    rec.recent_30d_activity_status = "VERIFIED_FB_PUBLIC_POST_WITH_CAPTURE_30D"
+    platform = _personal_post_platform(rec.fb_activity_proof.source_url)
+    rec.recent_30d_activity_status = ("VERIFIED_FB_PUBLIC_POST_WITH_CAPTURE_30D" if platform == "FB"
+                                     else f"VERIFIED_{platform}_PERSONAL_POST_WITH_CAPTURE_30D")
     rec.fb_activity_verified = True
     return True
 

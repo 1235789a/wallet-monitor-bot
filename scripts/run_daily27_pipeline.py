@@ -31,6 +31,7 @@ def build_dedupe_engine(
     history_dir: Path,
     downloads_dir: Path,
     strict_exclude_unsent_daily_locks: bool = False,
+    history_index: Path | None = None,
 ) -> CrossChannelDedupeEngine:
     engine = CrossChannelDedupeEngine()
     # Load authoritative historical delivered/contacted ledgers
@@ -54,7 +55,10 @@ def build_dedupe_engine(
         downloads_dir / "presented_lock_20261101.csv",
         is_in_progress=not strict_exclude_unsent_daily_locks,
     )
-    engine.mark_all_required_sources_loaded()
+    engine.loaded_sources.clear()  # Local legacy files provide match keys, not current coverage proof.
+    # Never fabricate source coverage. The portable index contains explicit audited coverage.
+    if history_index is not None:
+        engine.load_verified_history_index(history_index)
     return engine
 
 
@@ -72,6 +76,8 @@ def main() -> int:
         default=Path("/working_dir/c_88e8855a999448da/downloads"),
         help="Path to historical 103/112/central/FB ledgers",
     )
+    parser.add_argument("--history-index", type=Path, default=None,
+                        help="Private Drive snapshot JSON with source coverage; partial or stale index cannot clear history")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -82,7 +88,7 @@ def main() -> int:
         "--fb-activity-manifest",
         type=Path,
         default=None,
-        help="JSON file of independently reviewed dated FB public-post and business-activity evidence; missing evidence stays HOLD",
+        help="JSON file of independently reviewed dated personal FB/X/LinkedIn/Instagram post and business-activity evidence; missing evidence stays HOLD",
     )
     parser.add_argument(
         "--date",
@@ -107,6 +113,7 @@ def main() -> int:
         history_dir=args.history_dir,
         downloads_dir=args.downloads_dir,
         strict_exclude_unsent_daily_locks=args.strict_exclude_unsent_daily_locks,
+        history_index=args.history_index,
     )
     candidates = load_all_raw_and_checkpoint_candidates(args.downloads_dir)
     fb_activity_path = args.fb_activity_manifest or args.downloads_dir / "fb_activity_evidence.json"
