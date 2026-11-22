@@ -182,6 +182,23 @@ def normalize_fb_handle(url_or_handle: str) -> str:
     return f"fb:{path}"
 
 
+def normalize_social_profile(url: str) -> str:
+    """Exact personal/public business profile key for alternate contact routes."""
+    parsed = urlsplit(str(url or ""))
+    if parsed.scheme != "https":
+        return ""
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    parts = parsed.path.strip("/").split("/")
+    if host in {"x.com", "twitter.com", "mobile.twitter.com"} and parts[0] and (len(parts) == 1 or (len(parts) == 3 and parts[1] == "status")):
+        if re.fullmatch(r"[A-Za-z0-9_]{1,15}", parts[0]) and parts[0].lower() not in {"search", "home", "explore", "intent", "i", "compose"}:
+            return "x:" + parts[0].casefold()
+    if host == "linkedin.com" and len(parts) == 2 and parts[0] in {"in", "company"} and parts[1]:
+        return "linkedin:" + "/".join(parts).casefold()
+    if host == "instagram.com" and len(parts) == 1 and parts[0].lower() not in {"p", "reel", "explore", "accounts", "direct", "stories"} and re.fullmatch(r"[A-Za-z0-9_.]+", parts[0]):
+        return "instagram:" + parts[0].casefold()
+    return ""
+
+
 class CrossChannelDedupeEngine:
     """Indexes historical ledgers and performs multi-key entity deduplication."""
 
@@ -192,6 +209,7 @@ class CrossChannelDedupeEngine:
         self.wa_index: dict[str, list[str]] = {}
         self.tg_index: dict[str, list[str]] = {}
         self.fb_index: dict[str, list[str]] = {}
+        self.social_index: dict[str, list[str]] = {}
         self.id_index: dict[str, str] = {}  # canonical_domain or norm_name -> historical id
         self.in_progress_ids: dict[str, str] = {}  # domain/name -> original_prospect_id from active checkpoints
 
@@ -258,7 +276,6 @@ class CrossChannelDedupeEngine:
     def load_csv_ledger(self, source_tag: str, path: Path, is_in_progress: bool = False) -> int:
         if not path.exists():
             return 0
-        self.loaded_sources.add(source_tag)
         count = 0
         with path.open(encoding="utf-8", errors="replace") as f:
             reader = csv.reader(f)
@@ -311,12 +328,13 @@ class CrossChannelDedupeEngine:
                     is_in_progress=is_in_progress,
                 )
                 count += 1
+        if count:
+            self.loaded_sources.add(source_tag)
         return count
 
     def load_json_ledger(self, source_tag: str, path: Path, is_in_progress: bool = False) -> int:
         if not path.exists():
             return 0
-        self.loaded_sources.add(source_tag)
         data = json.loads(path.read_text(encoding="utf-8"))
         items = []
         if isinstance(data, list):
@@ -358,9 +376,54 @@ class CrossChannelDedupeEngine:
                 is_in_progress=is_in_progress,
             )
             count += 1
+        if count:
+            self.loaded_sources.add(source_tag)
         return count
 
+    def load_verified_history_index(self, path: Path) -> int:
+        """Load private portable index. Partial data still blocks duplicates, never clears coverage."""
+        from datetime import date, datetime, timezone
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if payload.get("schema") != "multihub-history-index-v1":
+            raise ValueError("Unknown history index schema")
+        rows = payload.get("records")
+        coverage = payload.get("coverage")
+        if not isinstance(rows, list) or not isinstance(coverage, dict):
+            raise ValueError("Missing history index records or coverage")
+        counts: dict[str, int] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("Invalid history row")
+            tag = str(row.get("source_tag") or "")
+            name = str(row.get("company_name") or "")
+            domain = str(row.get("canonical_domain") or "")
+            if not tag or not (name or domain):
+                continue
+            raw = str(row.get("contact_url") or "")
+            self._add_entry(tag, name, domain,
+                            wa=raw if "wa.me" in raw or "whatsapp" in raw else "",
+                            tg=raw if "t.me/" in raw or "telegram" in raw else "",
+                            fb=raw if "facebook" in raw or "messenger" in raw else "",
+                            prospect_id=str(row.get("original_prospect_id") or ""),
+                            is_in_progress=row.get("record_kind") == "IN_PROGRESS")
+            social_key = normalize_social_profile(raw)
+            if social_key and row.get("record_kind") != "IN_PROGRESS":
+                self.social_index.setdefault(social_key, []).append(tag)
+            counts[tag] = counts.get(tag, 0) + 1
+        # Coverage is explicitly audited, current and count-matched; absence never means clear.
+        today = datetime.now(timezone.utc).date()
+        checked = date.fromisoformat(payload["checked_on"])
+        if 0 <= (today - checked).days <= 1:
+            for tag in REQUIRED_HISTORY_KEYS:
+                proof = coverage.get(tag, {})
+                if (proof.get("status") == "VERIFIED_COMPLETE" and proof.get("sources")
+                        and isinstance(proof.get("record_count"), int)
+                        and proof["record_count"] > 0 and counts.get(tag) == proof["record_count"]):
+                    self.loaded_sources.add(tag)
+        return sum(counts.values())
+
     def mark_all_required_sources_loaded(self) -> None:
+        """Fixture helper only: never call from production CLI."""
         for req in REQUIRED_HISTORY_KEYS:
             self.loaded_sources.add(req)
 
@@ -415,6 +478,9 @@ class CrossChannelDedupeEngine:
                 batch_keys.add(f"tg:{t}")
             if f:
                 batch_keys.add(f"fb:{f}")
+            social_key = normalize_social_profile(link)
+            if social_key:
+                batch_keys.add(social_key)
         batch_keys.discard("")
 
         if any(k in seen_in_current_batch for k in batch_keys):
@@ -443,6 +509,9 @@ class CrossChannelDedupeEngine:
             f = normalize_fb_handle(link)
             if f and f in self.fb_index:
                 hits.extend([f"fb:{f}@{src}" for src in self.fb_index[f]])
+            social_key = normalize_social_profile(link)
+            if social_key and social_key in self.social_index:
+                hits.extend([f"{social_key}@{src}" for src in self.social_index[social_key]])
 
         if hits:
             rec.matched_history_sources = sorted(set(hits))
@@ -456,6 +525,13 @@ class CrossChannelDedupeEngine:
             rec.matched_history_sources = [HISTORIC_CONFLICT_DOMAINS[dom]]
             rec.history_status = "HOLD_HISTORY_CONFLICT"
             rec.hold_or_reject_reasons.append(f"Unresolved history conflict: {HISTORIC_CONFLICT_DOMAINS[dom]}")
+            return rec
+
+        missing = [key for key in REQUIRED_HISTORY_KEYS if key not in self.loaded_sources]
+        if missing:
+            rec.history_status = "HOLD_HISTORY_INCOMPLETE"
+            rec.stage = "HOLD_HISTORY"
+            rec.hold_or_reject_reasons.append("Missing verified history coverage: " + ", ".join(missing))
             return rec
 
         # Clear! Register in seen_in_current_batch so no duplicate seat is taken

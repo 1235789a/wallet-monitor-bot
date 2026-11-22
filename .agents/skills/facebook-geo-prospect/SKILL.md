@@ -3,7 +3,7 @@ name: facebook-geo-prospect
 description: Run MultiHub's evidence-first Facebook GEO prospecting. Use for Facebook获客、FB客户名单、跨渠道去重、Facebook老板/创始人搜索、Facebook话术、FB跟进或FB一键整客. Research and draft only: never send DMs automatically.
 ---
 
-# MultiHub Facebook GEO Prospect — execution skill v1.0
+# MultiHub Facebook GEO Prospect — execution skill v1.1 — 2026-11-22
 
 ## Mission and first principles
 Optimize **verified net profit per unit of operator effort**, not message counts, group size, or speculative reply rates. Count direct prospects and partnership/referral prospects separately. Paid conversion and profit must be derived solely from logged events; unobserved rates are `UNKNOWN`.
@@ -16,15 +16,13 @@ Optimize **verified net profit per unit of operator effort**, not message counts
 5. Do not automatically message, add friends, scrape private group members, bypass login gates/rate limits, rotate identities, or simulate activity. No automated engagement or bulk sending. Respect declines and contact preferences. Only user-approved, manually sent outreach through suitable business contact routes.
 6. Regulated industries are research-only by default and require their separate compliant gate; do not draft promotion or route them into general outreach.
 
-## Mandatory FB 30-day public activity evidence gate (2026-11-15)
+## Mandatory FB 30-day cross-platform activity evidence gate (2026-11-22)
 
 **This overrides old PASS tags or directory activity labels.** For a Facebook prospect to
 qualify as a reachable *active personal* business contact, inspect and capture BOTH:
 1. A company-specific dated commercial update in the last 30 calendar days (real
    publication/event, not an evergreen homepage), with a direct exact-source URL.
-2. A dated **public post by the actual intended Facebook business recipient** in the
-   last 30 days (a corporate Page post or Google snippet alone does not prove a
-   person's activity). Link to the exact post, not the Page/profile home.
+2. A dated **public business post by the same actual intended Facebook recipient** on Facebook, X, LinkedIn or Instagram in the last 30 days. A company Page, search snippet, or event listing without an attributable personal post does not prove personal activity. Link to the exact post, not a profile home. The existing grade stays S+ ≤72h, S ≤7d, A ≤14d, B ≤30d; same weights. Cross-platform proof does NOT establish FB activity or DM availability. Record platform and route separately. If FB personal contact is missing, route to an independently verified X/TG/etc lane, keeping the original entity ID and excluding it from FB quota.
 Record publication YYYY-MM-DD, researcher read-back timestamp in UTC (reviewed in
 the last 3 days), short quoted/paraphrased post excerpt, actor/company identity
 confirmation and original screen capture with exact SHA256. Recheck whether a
@@ -45,6 +43,7 @@ No automatic messaging and no guaranteed reply rate.
 
 ## Default run on request such as '给我一批 FB 多行业客户'
 ### Stage 0 — Reconcile and exclude
+- Use the private shared Drive `MultiHub_History_Index` JSON snapshot plus all current deltas. Read source coverage and statuses; a partial/stale index still excludes matches but cannot clear missing history. The active 103/112/CENTRAL_HISTORY/FB_PRESENTED/DAILY_PRESENTED coverage must be explicitly current and verified. Every batch has stable IDs, and flags for RAW/in-progress/PRESENTED/SENT remain distinct. Never publish history snapshots in this public repository.
 - Read Drive `MultiHub GE v2.1｜RECONCILIATION_LEDGER`, `MultiHub Prospect OS` historical lists, prior FB candidates, and known sent/declined statuses. Original (read-only) SOP: https://docs.google.com/document/d/1U4RHCntmoNRyGXZgkYoAYXi1J5WqHymGShdeQJZgMQo/edit . Current GitHub outreach policy: `prospect-os-workflow1/system/outreach-message-policy.md`.
 - If working from CSV exports, run `scripts/dedupe.py` against **all available** history files plus `assets/prior_fb_candidates.csv`. No-history-match means only checked sources yielded no match. Preserve ambiguity, aliases, parent/subsidiaries, alternate domains, same owner, and cross-channel contact history as review items.
 - **Presented-contact lock (2026-10-24):** always check Google Drive Facebook registry `https://docs.google.com/spreadsheets/d/1dZxd1gsbcxQiea9sNrdmLDkbZDvInXtn9zaXH3-EKZg/edit`, tab `已出示客户去重锁`, as well as the central History ledger `https://docs.google.com/spreadsheets/d/1gMiJr8TODAvJxweoXb7Y6hoJPTvP7NVX0BUo-knnwmk/edit` (entity IDs `fb-presented-20261024:*`). An entity marked `FB_PRESENTED_SEND_UNVERIFIED` is **not new** and must not be re-delivered in a new lead batch, and its sending state remains unverified until the user confirms; never infer contacted, replied, or declined. If asked specifically for follow-up, retrieve the existing card rather than rediscovering it.

@@ -380,5 +380,50 @@ class TestMultiHubDaily27Pipeline(unittest.TestCase):
             self.assertFalse(rec.fb_activity_verified)
             self.assertTrue(verify_facebook_activity(rec, datetime.now(timezone.utc).date()))
 
+    def test_fb_cross_platform_exact_posts_and_separate_route(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            business, personal = self._fresh_activity_proofs(Path(folder))
+            for url in ("https://x.com/founder/status/123456789",
+                        "https://www.linkedin.com/posts/founder_public-news-activity-123456789-ab12",
+                        "https://www.instagram.com/reel/aBc123/"):
+                personal.source_url = url
+                rec = CandidateRecord("CROSS", "Studio", "https://clutch.co/developers",
+                                      channel="FB", recipient_verified=True, fb_route_type="PERSON",
+                                      business_activity_proof=business, fb_activity_proof=personal)
+                self.assertTrue(verify_facebook_activity(rec, datetime.now(timezone.utc).date()))
+                rec.fb_route_type = "COMPANY_PAGE"
+                self.assertFalse(verify_facebook_activity(rec, datetime.now(timezone.utc).date()))
+            for url in ("https://x.com/founder", "https://www.linkedin.com/in/founder",
+                        "https://www.instagram.com/founder/", "https://example.org/events/founder"):
+                personal.source_url = url
+                self.assertTrue(any("NOT_A_SPECIFIC_PUBLIC_POST" in s for s in
+                                    check_activity_proof(personal, as_of=datetime.now(timezone.utc).date(), kind="FB_POST")))
+
+    def test_missing_history_never_clears_no_match(self) -> None:
+        rec = CandidateRecord("NEW", "Example Studio", "https://clutch.co/developers",
+                              official_url="https://example-studio.example")
+        engine = CrossChannelDedupeEngine()
+        self.assertEqual(engine.check_candidate(rec, set()).history_status, "HOLD_HISTORY_INCOMPLETE")
+
+    def test_partial_index_matches_but_does_not_grant_clearance(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            snapshot = Path(folder) / "history.json"
+            snapshot.write_text(json.dumps({
+                "schema": "multihub-history-index-v1",
+                "checked_on": datetime.now(timezone.utc).date().isoformat(),
+                "records": [{"source_tag": "CENTRAL_HISTORY", "company_name": "Old Studio",
+                             "canonical_domain": "old-studio.example"}],
+                "coverage": {"CENTRAL_HISTORY": {"status": "VERIFIED_COMPLETE",
+                             "sources": ["central"], "record_count": 1}},
+            }), encoding="utf-8")
+            engine = CrossChannelDedupeEngine()
+            self.assertEqual(engine.load_verified_history_index(snapshot), 1)
+            old = CandidateRecord("OLD", "Old Studio", "https://clutch.co/developers",
+                                  official_url="https://old-studio.example")
+            new = CandidateRecord("NEW", "New Studio", "https://clutch.co/developers",
+                                  official_url="https://new-studio.example")
+            self.assertEqual(engine.check_candidate(old, set()).history_status, "HISTORY_MATCH_EXCLUDE")
+            self.assertEqual(engine.check_candidate(new, set()).history_status, "HOLD_HISTORY_INCOMPLETE")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
