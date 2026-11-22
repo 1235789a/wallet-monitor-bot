@@ -26,3 +26,6 @@ Preserve the evidence gates and the existing ban on automated sending.
 
 ## 2026-11-22 dual-gate correction
 For Facebook prospects apply `prospect-os-workflow1/system/fb-activity-verification.md`: personal business activity can be proven on FB/X/LinkedIn/Instagram; Facebook personal contactability is a separate gate. Use a current private portable Drive history index plus live deltas and report per-source coverage. Missing history remains HOLD_HISTORY. Recheck existing IDs before discovery, never double-count or send automatically.
+
+## 2026-11-22 WhatsApp-only Gemini lane
+Gemini handles WA research only. Apply `prospect-os-workflow1/system/wa-website-preflight.md` before expensive WA research: official-site contact extraction, 60-day documented company commercial activity, independent source and history gates. Last-seen is optional prioritization evidence, never a hard requirement. Public link/label is not registered-account, human-recipient or opt-in verification. FB/TG and separate Buyer-Intent Sprint rules stay unchanged.

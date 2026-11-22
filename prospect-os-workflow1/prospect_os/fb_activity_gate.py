@@ -111,7 +111,8 @@ def _capture_matches(proof: ActivityProof) -> bool:
         return False
 
 
-def check_activity_proof(proof: ActivityProof, *, as_of: date, kind: str) -> list[str]:
+def check_activity_proof(proof: ActivityProof, *, as_of: date, kind: str,
+                         max_activity_days: int = MAX_ACTIVITY_DAYS, require_capture: bool = True) -> list[str]:
     """Return precise HOLD codes; never trust a legacy PASS/VERIFIED label."""
     code = "FB_POST" if kind == "FB_POST" else "BUSINESS"
     prefix = f"HOLD_{code}_ACTIVITY"
@@ -124,7 +125,7 @@ def check_activity_proof(proof: ActivityProof, *, as_of: date, kind: str) -> lis
         days = (as_of - published).days
         if days < 0:
             issues.append(f"{prefix}_FUTURE_DATE")
-        elif days > MAX_ACTIVITY_DAYS:
+        elif days > max_activity_days:
             issues.append(f"{prefix}_STALE_{days}D")
     if not checked:
         issues.append(f"{prefix}_REVIEW_TIME_MISSING_OR_NOT_UTC")
@@ -141,7 +142,7 @@ def check_activity_proof(proof: ActivityProof, *, as_of: date, kind: str) -> lis
         issues.append(f"{prefix}_EXCERPT_MISSING")
     if not proof.source_url or not (_personal_post_platform(proof.source_url) if kind == "FB_POST" else _specific_business_source(proof.source_url)):
         issues.append(f"{prefix}_NOT_A_SPECIFIC_PUBLIC_POST")
-    if not _capture_matches(proof):
+    if (require_capture or proof.capture_path or proof.capture_sha256) and not _capture_matches(proof):
         issues.append(f"{prefix}_ORIGINAL_CAPTURE_MISSING_OR_HASH_MISMATCH")
     return issues
 

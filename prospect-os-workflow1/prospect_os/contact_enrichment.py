@@ -1,8 +1,8 @@
 """Conservative contact enrichment for an already discovered company pool.
 
-Only the supplied company website is crawled.  An explicit WhatsApp/Telegram
-link is recorded as a route, but never promoted to owner access.  Plain phone
-numbers remain phone numbers.  Generic inboxes remain gatekeeper routes.
+Only the supplied company website is crawled. Explicit WhatsApp/Telegram links
+are recorded as routes, never owner access. Only explicitly WhatsApp-labelled
+international numbers may generate a candidate link; ordinary phones stay phone.
 """
 
 from __future__ import annotations
@@ -42,13 +42,13 @@ PRIORITY_PATH_TERMS = (
 CONTACT_PATH_TERMS = (
     "contact", "contact-us", "contactus", "contacto", "contactos", "contactanos",
     "contáctanos", "contato", "fale-conosco", "faleconosco", "atendimento",
-    "support", "sales", "suporte", "pedidos", "encomendas", "orçamento",
+    "support", "sales", "partnership", "business-development", "quote", "suporte", "pedidos", "encomendas", "orçamento",
     "orcamento", "whatsapp", "kontakt", "impressum", "contate-nos",
 )
 CONTACT_ANCHOR_TERMS = (
     "contact", "contact-us", "contacto", "contactos", "contactanos", "contáctanos",
     "contato", "fale conosco", "fale-conosco", "faleconosco", "atendimento",
-    "support", "sales", "suporte", "pedidos", "encomendas", "orçamento",
+    "support", "sales", "partnership", "business development", "quote", "suporte", "pedidos", "encomendas", "orçamento",
     "orcamento", "whatsapp", "about", "team", "founder", "owner", "store", "shop",
     "quem somos", "quem-somos", "sobre", "nosotros", "quienes somos",
     "quienes-somos", "tienda",
@@ -67,6 +67,8 @@ EXPLICIT_CHAT_URL = re.compile(
     r"https?://(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com|whatsapp\.com|t\.me|telegram\.me)/[^\s\"'<>\\]+",
     re.I,
 )
+WA_LABELLED_NUMBER = re.compile(r"\b(?:phone\s*/\s*)?whatsapp\s*(?:number|phone|tel\.?|号码)?\s*[:：]?\s*(\+\d[\d .()\-]{6,23}\d)", re.I)
+WA_WIDGET_NUMBER = re.compile(r'''\bdata-whatsapp-(?:number|phone)\s*=\s*["'](\+\d[\d .()\-]{6,23}\d)["']''', re.I)
 SOCIAL_HOSTS = {
     "linkedin.com": "linkedin", "facebook.com": "facebook",
     "instagram.com": "instagram", "x.com": "x", "twitter.com": "x",
@@ -204,6 +206,30 @@ def _route_contact(channel: str, url: str, source_url: str, anchor_text: str) ->
     }
 
 
+def whatsapp_labelled_route(number: str, page_url: str, label: str) -> dict[str, Any] | None:
+    """Normalize only an explicitly labelled international business number.
+
+    A valid E.164 phone number is not proof of a registered WhatsApp account,
+    human ownership or marketing permission. Fail closed without the dependency.
+    """
+    try:
+        import phonenumbers
+    except ImportError:
+        return None
+    try:
+        parsed = phonenumbers.parse(number, None)
+        if not phonenumbers.is_valid_number(parsed):
+            return None
+        digits = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164).lstrip("+")
+    except (phonenumbers.NumberParseException, ValueError):
+        return None
+    item = _route_contact("whatsapp", f"https://wa.me/{digits}", page_url, label)
+    item["phone_hint"] = digits
+    item["route_verification_status"] = "OFFICIAL_LABEL_NUMBER_GENERATED_UNVERIFIED"
+    item["evidence"] = _evidence(f"Official website explicitly labels number {number} as WhatsApp; link generated, account unverified.", page_url)
+    return item
+
+
 def extract_contacts(page_url: str, page_html: str) -> dict[str, Any]:
     parser = ContactPageParser()
     parser.feed(page_html)
@@ -226,6 +252,10 @@ def extract_contacts(page_url: str, page_html: str) -> dict[str, Any]:
                 contacts.append(_email_contact(address, page_url))
             continue
         if lowered.startswith("tel:"):
+            if re.search(r"\bwhatsapp\b", link["text"], re.I):
+                labelled = whatsapp_labelled_route(unquote(raw_href[4:].split("?", 1)[0]), page_url, link["text"])
+                if labelled:
+                    contacts.append(labelled)
             contacts.append({
                 "channel": "phone",
                 "value": unquote(raw_href[4:].split("?", 1)[0]),
@@ -270,6 +300,14 @@ def extract_contacts(page_url: str, page_html: str) -> dict[str, Any]:
         if channel == "whatsapp":
             item["phone_hint"] = _whatsapp_value(absolute)
         contacts.append(item)
+
+    # Keep labelled phone candidates distinct from an actually published URL.
+    for regex, source, label in ((WA_LABELLED_NUMBER, page_text, "WhatsApp labelled number"),
+                                  (WA_WIDGET_NUMBER, page_html, "WhatsApp widget number")):
+        for number in regex.findall(source):
+            item = whatsapp_labelled_route(number, page_url, label)
+            if item:
+                contacts.append(item)
 
     unique: dict[tuple[str, str], dict[str, Any]] = {}
     for contact in contacts:
@@ -331,6 +369,8 @@ def _is_explicit_direct_chat(contact: dict[str, Any]) -> bool:
     if channel == "whatsapp" and host in {
         "wa.me", "api.whatsapp.com", "web.whatsapp.com", "whatsapp.com",
     }:
+        if contact.get("route_verification_status") == "OFFICIAL_LABEL_NUMBER_GENERATED_UNVERIFIED":
+            return False
         digits = _whatsapp_value(url)
         if host == "wa.me" and path.casefold().startswith("message/"):
             return len(path.split("/", 1)[1]) >= 6
@@ -350,6 +390,8 @@ def enrich_record(
     respect_robots: bool = True,
     robots_timeout: int = 10,
     fetcher: Callable[[str], tuple[str, str]] = fetch_html,
+    render_fetcher: Callable[[str], tuple[str, str, list[str]]] | None = None,
+    max_render_pages: int = 2,
 ) -> dict[str, Any]:
     result = dict(record)
     website = str(record.get("website_url") or "").strip()
@@ -368,6 +410,7 @@ def enrich_record(
     seen: set[str] = set()
     contacts: dict[tuple[str, str], dict[str, Any]] = {}
     role_evidence: list[dict[str, Any]] = []
+    rendered_pages = 0
     while queue and len(seen) < max_pages:
         url = queue.pop(0)
         if url in seen or _host(url) != _host(website):
@@ -384,6 +427,29 @@ def enrich_record(
                 })
                 continue
             parsed = extract_contacts(final_url, body)
+            if render_fetcher and rendered_pages < max_render_pages and not any(
+                    c.get("channel") == "whatsapp" and _is_explicit_direct_chat(c)
+                    and not c.get("route_verification_status") for c in parsed["contacts"]):
+                rendered_pages += 1
+                try:
+                    rendered_html, rendered_url, qr_urls = render_fetcher(final_url)
+                    if _host(rendered_url) == _host(website):
+                        rendered = extract_contacts(rendered_url, rendered_html)
+                        for item in rendered["contacts"]:
+                            if item.get("channel") == "whatsapp":
+                                item["route_evidence_kind"] = "RENDERED_PUBLIC_DOM"
+                        parsed["contacts"].extend(rendered["contacts"])
+                        parsed["internal_links"].extend(rendered["internal_links"])
+                        parsed["internal_link_anchors"].extend(rendered["internal_link_anchors"])
+                        for qr_url in qr_urls:
+                            if _host(qr_url) in {"wa.me", "api.whatsapp.com", "web.whatsapp.com"}:
+                                item = _route_contact("whatsapp", qr_url, rendered_url, "Official WhatsApp QR code")
+                                item["route_evidence_kind"] = "PUBLIC_QR_CODE_DECODED"
+                                parsed["contacts"].append(item)
+                    else:
+                        result["contact_enrichment_errors"].append({"url": url, "error": "render_redirected_outside_company_domain"})
+                except RuntimeError as exc:
+                    result["contact_enrichment_errors"].append({"url": url, "error": str(exc)})
             result["pages_checked"].append(final_url)
             result["page_evidence"].append({"url": final_url, "text": parsed["text"],
                 "internal_links": parsed["internal_links"][:50], "contacts": parsed["contacts"],
@@ -423,7 +489,7 @@ def enrich_record(
             # Some small business sites omit their contact page from the home
             # navigation. Try common local slugs only after discovered links.
             for slug in ("contact", "contato", "contacto", "fale-conosco",
-                         "faleconosco", "atendimento", "support", "sales", "whatsapp"):
+                         "faleconosco", "atendimento", "sales", "partnership", "get-a-quote", "whatsapp", "support"):
                 guessed = _clean_url(urljoin(website.rstrip("/") + "/", slug))
                 if guessed not in seen and guessed not in queue:
                     queue.append(guessed)

@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from prospect_os.cross_channel_dedupe import CrossChannelDedupeEngine
 from prospect_os.daily27_pipeline import Daily27Pipeline
 from prospect_os.fb_activity_gate import apply_fb_activity_manifest
+from prospect_os.wa_activity_gate import apply_wa_activity_manifest
 from prospect_os.raw_pool_loader import load_all_raw_and_checkpoint_candidates
 from validate_daily27_production import validate_production_pack
 
@@ -96,6 +97,8 @@ def main() -> int:
         default=date.today().isoformat(),
         help="Execution date (YYYY-MM-DD)",
     )
+    parser.add_argument("--wa-activity-manifest", type=Path, default=None,
+                        help="Reviewed dated company activity evidence for WA 60-day gate")
     parser.add_argument(
         "--max-image-budget",
         type=int,
@@ -118,6 +121,8 @@ def main() -> int:
     candidates = load_all_raw_and_checkpoint_candidates(args.downloads_dir)
     fb_activity_path = args.fb_activity_manifest or args.downloads_dir / "fb_activity_evidence.json"
     fb_activity_imported = apply_fb_activity_manifest(candidates, fb_activity_path) if fb_activity_path.is_file() else 0
+    wa_activity_path = args.wa_activity_manifest or args.downloads_dir / "wa_activity_evidence.json"
+    wa_activity_imported = apply_wa_activity_manifest(candidates, wa_activity_path) if wa_activity_path.is_file() else 0
 
     pipeline = Daily27Pipeline(
         output_dir=args.output_dir,
@@ -132,6 +137,7 @@ def main() -> int:
         "run_date": args.date,
         "fb_activity_manifest_found": fb_activity_path.is_file(),
         "fb_activity_evidence_records_imported": fb_activity_imported,
+        "wa_activity_evidence_records_imported": wa_activity_imported,
         "mode": "strict_net_new" if args.strict_exclude_unsent_daily_locks else "resume_and_backfill",
         "validation_passed": validation["structural_and_integrity_valid"],
         "quota_27_strict_send_ready_met": validation["quota_fully_met_27_send_ready"],

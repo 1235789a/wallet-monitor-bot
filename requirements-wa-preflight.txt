@@ -1,0 +1,4 @@
+# Optional WA-only public website extractor dependencies; no WhatsApp client/API.
+playwright==1.62.0
+phonenumbers==9.0.44
+zxing-cpp==3.1.1

@@ -21,6 +21,12 @@ from prospect_os.outreach_qa_gate import evaluate_outreach_qa, generate_personal
 from prospect_os.drive_delivery import build_drive_delivery_manifest
 
 class TestMultiHubDaily27Pipeline(unittest.TestCase):
+    @staticmethod
+    def wa_activity_fixture() -> ActivityProof:
+        today = datetime.now(timezone.utc)
+        return ActivityProof(source_url="https://mt7.io/blog/recent-product-news", activity_date=(today.date()-timedelta(days=45)).isoformat(),
+                             checked_at_utc=today.isoformat(), excerpt="Synthetic test fixture for a dated product update.",
+                             subject_type="COMPANY", subject_confirmed=True)
     def test_reject_telegram_bots_and_channels(self) -> None:
         self.assertFalse(is_valid_tg_url("https://t.me/Omegalab_bot", reject_bots=True))
         self.assertFalse(is_valid_tg_url("https://t.me/sample_bot", reject_bots=True))
@@ -96,6 +102,7 @@ class TestMultiHubDaily27Pipeline(unittest.TestCase):
                 allocated_slot="WA-01",
                 contact_url="https://wa.me/917800007500",
                 contact_route_source="https://mt7.io/locations/bengaluru",
+                business_activity_proof=self.wa_activity_fixture(),
                 primary_service="resort booking engines with Razorpay and two-way eZee PMS sync",
                 observed_site_fact="Official resort page documents direct booking with Razorpay and eZee sync.",
                 recipient_name="Abdul Adnan",
@@ -127,6 +134,7 @@ class TestMultiHubDaily27Pipeline(unittest.TestCase):
                 channel="WA",
                 contact_url="https://wa.me/917800007500",
                 contact_route_source="https://mt7.io/locations/bengaluru",
+                business_activity_proof=self.wa_activity_fixture(),
                 primary_service="resort booking engines with Razorpay and eZee PMS sync",
                 observed_site_fact="Official resort page documents direct booking with Razorpay and eZee sync.",
             )
@@ -158,6 +166,7 @@ class TestMultiHubDaily27Pipeline(unittest.TestCase):
                 channel="WA",
                 contact_url="https://wa.me/917800007500",
                 contact_route_source="https://mt7.io/locations/bengaluru",
+                business_activity_proof=self.wa_activity_fixture(),
                 primary_service="resort booking engines with Razorpay and eZee PMS sync",
                 observed_site_fact="Official resort page documents direct booking with Razorpay and eZee sync.",
             )
@@ -235,6 +244,7 @@ class TestMultiHubDaily27Pipeline(unittest.TestCase):
                 channel="WA",
                 contact_url="https://wa.me/917800007500",
                 contact_route_source="https://mt7.io/locations/bengaluru",
+                business_activity_proof=self.wa_activity_fixture(),
                 primary_service="resort booking engines with Razorpay and eZee PMS sync",
                 observed_site_fact="Official resort page documents direct booking with Razorpay and eZee sync.",
             )
