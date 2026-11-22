@@ -529,6 +529,9 @@ class CrossChannelDedupeEngine:
 
         missing = [key for key in REQUIRED_HISTORY_KEYS if key not in self.loaded_sources]
         if missing:
+            # A partial history index cannot clear a candidate, but it must still
+            # prevent duplicate slots within the current batch.
+            seen_in_current_batch.update(batch_keys)
             rec.history_status = "HOLD_HISTORY_INCOMPLETE"
             rec.stage = "HOLD_HISTORY"
             rec.hold_or_reject_reasons.append("Missing verified history coverage: " + ", ".join(missing))

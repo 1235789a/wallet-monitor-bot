@@ -29,3 +29,5 @@ For Facebook prospects apply `prospect-os-workflow1/system/fb-activity-verificat
 
 ## 2026-11-22 WhatsApp-only Gemini lane
 Gemini handles WA research only. Apply `prospect-os-workflow1/system/wa-website-preflight.md` before expensive WA research: official-site contact extraction, 60-day documented company commercial activity, independent source and history gates. Last-seen is optional prioritization evidence, never a hard requirement. Public link/label is not registered-account, human-recipient or opt-in verification. FB/TG and separate Buyer-Intent Sprint rules stay unchanged.
+
+Before any bulk WA discovery, run the private history coverage precheck. A partial index allows at most 10 research-only pilot probes, never bulk quotas. Gemini without browser/terminal access supplies strict JSON identity hints only; executor verifies public sites and evidence. Reject malformed handoffs, count actual verified probes, and lock already-presented HOLD identities for later continuation without marking them sent.

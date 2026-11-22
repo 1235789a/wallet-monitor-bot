@@ -10,6 +10,7 @@ on:
       - "scripts/validate_daily27_production.py"
       - "scripts/test_daily27_runtime.py"
       - "scripts/test_wa_website_preflight.py"
+      - "scripts/test_wa_batch_intake.py"
       - "scripts/run_wa_website_preflight.py"
       - "requirements-wa-preflight.txt"
       - "prospect-os-workflow1/test_outreach*.py"
@@ -32,6 +33,8 @@ jobs:
         run: python scripts/test_daily27_runtime.py
       - name: Test WA website preflight (offline fixtures)
         run: python scripts/test_wa_website_preflight.py
+      - name: Test WA strict intake and history precheck
+        run: python scripts/test_wa_batch_intake.py
       - name: Test outreach copy and conversation Humanizer
         working-directory: prospect-os-workflow1
         run: python -m unittest test_outreach_copy test_outreach_humanizer -v
