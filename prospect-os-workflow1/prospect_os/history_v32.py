@@ -125,13 +125,13 @@ def reconcile_contact_claims(claims: list[dict]) -> dict:
         text = status + " " + note
         if "NO_REPLY" in text or "NOT_REPLIED" in text or "暂无回复" in text or "未回复" in text:
             found.add("NO_REPLY")
-        if "REPLIED" in status or "已回复" in text or "收到回复" in text:
+        if status in {"REPLIED", "CUSTOMER_REPLIED", "INBOUND_REPLY"} or "已回复" in text or "收到回复" in text:
             found.add("REPLIED_CLAIM")
         if any(x in text for x in ("CONTACTED", "SENT", "已联系", "已发送", "已发出")):
             found.add("CONTACTED")
-        if "READY" in status:
+        if status in {"READY", "SEND_READY", "RESEARCH_READY"}:
             found.add("READY")
-        if "PAID" in status:
+        if status in {"PAID", "PAYMENT_RECEIVED"}:
             found.add("PAID_CLAIM")
 
     issues = []
